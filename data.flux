@@ -1,0 +1,7 @@
+from(bucket: "sailgp")
+  |> range(start: {startTime}, stop: {stopTime})
+  |> filter(fn: (r) => {measurementFilter})
+  |> filter(fn: (r) => r["_field"] == "value")
+  |> filter(fn: (r) => r["level"] == "strm")
+  |> filter(fn: (r) => r["boat"] == "{boat}")
+  |> drop(columns: ["_start","_stop","_field","level"])
