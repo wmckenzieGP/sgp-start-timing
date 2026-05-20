@@ -313,6 +313,29 @@ st.markdown("""
         border: 1px solid rgba(255, 255, 255, 0.1);
         box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
     }
+
+    /* Ensure form inputs have white background for readability */
+    input[type="text"],
+    input[type="password"],
+    input[type="number"],
+    textarea,
+    select,
+    .stTextInput input,
+    .stNumberInput input,
+    .stDateInput input,
+    .stTimeInput input,
+    .stTextArea textarea,
+    .stSelectbox select,
+    .stMultiSelect select {
+        background-color: #ffffff !important;
+        color: #000000 !important;
+    }
+
+    /* Placeholder text color for better contrast */
+    ::placeholder {
+        color: #666666 !important;
+        opacity: 1 !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
