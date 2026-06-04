@@ -187,3 +187,7 @@ App.zip
 # Streamlit runtime logs
 streamlit.log
 *.log
+
+# Google service account credentials
+*.json
+!presets.json
