@@ -17,5 +17,5 @@ streamlit-bokeh==3.8.3
 utm==0.8.1
 xyzservices==2025.11.0
 arrow==1.4.0
-gspread==6.1.4
-google-auth==2.38.0
+gspread>=6.0.0
+google-auth>=2.0.0
