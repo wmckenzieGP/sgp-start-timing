@@ -8,6 +8,7 @@ import time as time_lib
 import hashlib
 from data_fetcher import SGPDataProvider
 import utils as u
+import sheets_client
 
 # Set page configuration
 st.set_page_config(
@@ -309,25 +310,31 @@ def get_status_color(value, target, tolerance):
     else:
         return "red", "OUT"
 
-def render_target_card(name, value, target, tolerance, unit_str, format_str):
+def render_target_card(name, value, target, tolerance, unit_str, format_str, source=None):
     color, status_text = get_status_color(value, target, tolerance)
-    
+
     if value is not None and not pd.isna(value):
         val_display = format_str.format(value) + " " + unit_str
     else:
         val_display = "N/A"
-        
+
     upper_bound = target + tolerance
     lower_bound = target - tolerance
-    
+
     tgt_display = format_str.format(target) + " " + unit_str
     upper_display = format_str.format(upper_bound) + " " + unit_str
     lower_display = format_str.format(lower_bound) + " " + unit_str
-    
+
+    source_badge = (
+        f'<span style="font-size:0.6rem;color:#38bdf8;font-weight:500;'
+        f'letter-spacing:0.3px;margin-left:6px;">&#9654; {source}</span>'
+        if source else ""
+    )
+
     html = f"""
     <div class="target-card">
         <div class="target-info">
-            <div class="target-name">{name}</div>
+            <div class="target-name">{name}{source_badge}</div>
             <div class="target-bounds">
                 <div class="bound-row">
                     <span class="bound-label">Target:</span>
@@ -709,10 +716,26 @@ def main():
             target_averages[target_name] = None
 
     # ------------------
+    # SPEED v2 Sheet Target Overrides
+    # ------------------
+    sheet_targets = {}
+    if not filtered_periods.is_empty():
+        mean_bsp = filtered_periods['bsp_mean'].mean() if 'bsp_mean' in filtered_periods.columns else None
+        mean_tws = filtered_periods['tws_mean'].mean() if 'tws_mean' in filtered_periods.columns else None
+        sheet_targets = sheets_client.get_sheet_targets(mean_bsp, mean_tws, upwind_mode)
+        for metric, sheet_val in sheet_targets.items():
+            if metric in active_targets:
+                active_targets[metric]['target'] = sheet_val
+
+    if sheet_targets:
+        metrics_str = ' · '.join(sheet_targets.keys())
+        st.info(f"📊 **SPEED v2:** Targets for **{metrics_str}** interpolated from the sheet based on session BSP & TWS.")
+
+    # ------------------
     # TARGET DASHBOARD GRID
     # ------------------
     st.markdown("<hr style='border-color: #334155;'>", unsafe_allow_html=True)
-    
+
     # Category 1: Global
     st.markdown("<div class='category-header'>Global Performance</div>", unsafe_allow_html=True)
     cols_global = st.columns(3)
@@ -746,9 +769,10 @@ def main():
                 target=tgt_val,
                 tolerance=tol_val,
                 unit_str=TARGETS_METADATA[name]["unit"],
-                format_str=TARGETS_METADATA[name]["format"]
+                format_str=TARGETS_METADATA[name]["format"],
+                source="SPEED v2" if name in sheet_targets else None
             )
-            
+
     cols_foils2 = st.columns(2)
     foils_list2 = ["Rudder Average", "Rudder Differential"]
     for idx, name in enumerate(foils_list2):
@@ -762,7 +786,8 @@ def main():
                 target=tgt_val,
                 tolerance=tol_val,
                 unit_str=TARGETS_METADATA[name]["unit"],
-                format_str=TARGETS_METADATA[name]["format"]
+                format_str=TARGETS_METADATA[name]["format"],
+                source="SPEED v2" if name in sheet_targets else None
             )
 
     # Category 3: Wing
