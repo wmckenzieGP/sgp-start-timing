@@ -148,7 +148,7 @@ class SGPDataProvider:
         df = u.ignore_imu_travel(df)
         df = u.add_board_states(df)
         df = u.add_windward_leeward_metrics(df)
-        df = u.normalize_columns(df, columns=['twa', 'tgt_twa', 'leeway', 'rudder_angle', 'wing_twist', 'wing_rotation', 'clew_angle', 'cam1_angle', 'cam2_angle', 'cam3_angle', 'cam4_angle', 'cam5_angle', 'cam6_angle'])
+        df = u.normalize_columns(df, columns=['twa', 'tgt_twa', 'leeway', 'rudder_angle', 'wing_twist', 'wing_rotation', 'clew_angle', 'cam1_angle', 'cam2_angle', 'cam3_angle', 'cam4_angle', 'cam5_angle', 'cam6_angle', 'heel'])
         df = u.add_utm_pos(df)
         df = u.calculate_target_percent(df)
         

@@ -66,6 +66,7 @@ RENAMING_DICT = {
     'ANGLE_CA2_deg': 'cam2_angle',
     'ANGLE_CA1_deg': 'cam1_angle',
     'ANGLE_CLEW_deg': 'clew_angle',
+    'LENGTH_WING_CLEW_mm': 'wing_clew',
     'TEST_METRIC_1_unk': 'test_metric_1',
     'ANGLE_WING_ROT_deg': 'wing_rotation',
     
