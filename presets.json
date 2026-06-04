@@ -1,0 +1,356 @@
+{
+    "TWS 10-15 kts": {
+        "upwind": {
+            "BSP": {
+                "target": 35.0,
+                "tolerance": 2.0
+            },
+            "TWA": {
+                "target": 45.0,
+                "tolerance": 3.0
+            },
+            "VMG": {
+                "target": 25.0,
+                "tolerance": 2.0
+            },
+            "CANT": {
+                "target": 4.0,
+                "tolerance": 1.0
+            },
+            "CANT Drop Target": {
+                "target": 3.0,
+                "tolerance": 0.5
+            },
+            "Ride Height": {
+                "target": 900.0,
+                "tolerance": 50.0
+            },
+            "Rudder Average": {
+                "target": 3.0,
+                "tolerance": 1.0
+            },
+            "Rudder Differential": {
+                "target": 1.5,
+                "tolerance": 0.5
+            },
+            "Camber (CA1)": {
+                "target": 19.0,
+                "tolerance": 2.0
+            },
+            "Wing Twist": {
+                "target": 8.0,
+                "tolerance": 1.5
+            },
+            "Clew Position": {
+                "target": 850.0,
+                "tolerance": 50.0
+            },
+            "Wing Rotation": {
+                "target": 22.0,
+                "tolerance": 2.0
+            },
+            "Heel": {
+                "target": 3.0,
+                "tolerance": 1.0
+            },
+            "Pitch": {
+                "target": 0.5,
+                "tolerance": 0.3
+            }
+        },
+        "downwind": {
+            "BSP": {
+                "target": 45.0,
+                "tolerance": 3.0
+            },
+            "TWA": {
+                "target": 140.0,
+                "tolerance": 5.0
+            },
+            "VMG": {
+                "target": 35.0,
+                "tolerance": 3.0
+            },
+            "CANT": {
+                "target": 6.0,
+                "tolerance": 1.0
+            },
+            "CANT Drop Target": {
+                "target": 2.0,
+                "tolerance": 0.5
+            },
+            "Ride Height": {
+                "target": 350.0,
+                "tolerance": 50.0
+            },
+            "Rudder Average": {
+                "target": 0.0,
+                "tolerance": 1.0
+            },
+            "Rudder Differential": {
+                "target": 2.0,
+                "tolerance": 0.5
+            },
+            "Camber (CA1)": {
+                "target": 15.0,
+                "tolerance": 2.0
+            },
+            "Wing Twist": {
+                "target": 12.0,
+                "tolerance": 2.0
+            },
+            "Clew Position": {
+                "target": 750.0,
+                "tolerance": 50.0
+            },
+            "Wing Rotation": {
+                "target": 26.0,
+                "tolerance": 2.0
+            },
+            "Heel": {
+                "target": 4.0,
+                "tolerance": 1.0
+            },
+            "Pitch": {
+                "target": 1.0,
+                "tolerance": 0.3
+            }
+        }
+    },
+    "Auckland Day 1": {
+        "upwind": {
+            "BSP": {
+                "target": 36.5,
+                "tolerance": 1.5
+            },
+            "TWA": {
+                "target": 46.5,
+                "tolerance": 2.0
+            },
+            "VMG": {
+                "target": 26.0,
+                "tolerance": 1.5
+            },
+            "CANT": {
+                "target": 4.2,
+                "tolerance": 0.8
+            },
+            "CANT Drop Target": {
+                "target": 1.4,
+                "tolerance": 0.4
+            },
+            "Ride Height": {
+                "target": 230.0,
+                "tolerance": 40.0
+            },
+            "Rudder Average": {
+                "target": 0.2,
+                "tolerance": 0.8
+            },
+            "Rudder Differential": {
+                "target": 1.6,
+                "tolerance": 0.4
+            },
+            "Camber (CA1)": {
+                "target": 12.5,
+                "tolerance": 1.5
+            },
+            "Wing Twist": {
+                "target": 8.5,
+                "tolerance": 1.0
+            },
+            "Clew Position": {
+                "target": 830.0,
+                "tolerance": 40.0
+            },
+            "Wing Rotation": {
+                "target": 21.5,
+                "tolerance": 1.5
+            },
+            "Heel": {
+                "target": 3.2,
+                "tolerance": 0.8
+            },
+            "Pitch": {
+                "target": 0.4,
+                "tolerance": 0.2
+            }
+        },
+        "downwind": {
+            "BSP": {
+                "target": 47.0,
+                "tolerance": 2.5
+            },
+            "TWA": {
+                "target": 137.5,
+                "tolerance": 4.0
+            },
+            "VMG": {
+                "target": 37.0,
+                "tolerance": 2.5
+            },
+            "CANT": {
+                "target": 5.8,
+                "tolerance": 0.8
+            },
+            "CANT Drop Target": {
+                "target": 1.8,
+                "tolerance": 0.4
+            },
+            "Ride Height": {
+                "target": 320.0,
+                "tolerance": 40.0
+            },
+            "Rudder Average": {
+                "target": 0.1,
+                "tolerance": 0.8
+            },
+            "Rudder Differential": {
+                "target": 1.8,
+                "tolerance": 0.4
+            },
+            "Camber (CA1)": {
+                "target": 14.5,
+                "tolerance": 1.5
+            },
+            "Wing Twist": {
+                "target": 11.5,
+                "tolerance": 1.5
+            },
+            "Clew Position": {
+                "target": 780.0,
+                "tolerance": 40.0
+            },
+            "Wing Rotation": {
+                "target": 25.0,
+                "tolerance": 1.5
+            },
+            "Heel": {
+                "target": 3.8,
+                "tolerance": 0.8
+            },
+            "Pitch": {
+                "target": 0.9,
+                "tolerance": 0.2
+            }
+        }
+    },
+    "Test": {
+        "upwind": {
+            "BSP": {
+                "target": 48.0,
+                "tolerance": 2.0
+            },
+            "TWA": {
+                "target": 45.0,
+                "tolerance": 3.0
+            },
+            "VMG": {
+                "target": 36.0,
+                "tolerance": 2.0
+            },
+            "CANT": {
+                "target": 4.0,
+                "tolerance": 1.0
+            },
+            "CANT Drop Target": {
+                "target": 3.0,
+                "tolerance": 0.5
+            },
+            "Ride Height": {
+                "target": 1000.0,
+                "tolerance": 100.0
+            },
+            "Rudder Average": {
+                "target": 4.0,
+                "tolerance": 1.0
+            },
+            "Rudder Differential": {
+                "target": 1.5,
+                "tolerance": 0.5
+            },
+            "Camber (CA1)": {
+                "target": 19.0,
+                "tolerance": 2.0
+            },
+            "Wing Twist": {
+                "target": 25.0,
+                "tolerance": 5.0
+            },
+            "Clew Position": {
+                "target": 300.0,
+                "tolerance": 50.0
+            },
+            "Wing Rotation": {
+                "target": 5.0,
+                "tolerance": 2.0
+            },
+            "Heel": {
+                "target": 1.0,
+                "tolerance": 1.0
+            },
+            "Pitch": {
+                "target": -2.5,
+                "tolerance": 0.3
+            }
+        },
+        "downwind": {
+            "BSP": {
+                "target": 45.0,
+                "tolerance": 3.0
+            },
+            "TWA": {
+                "target": 140.0,
+                "tolerance": 5.0
+            },
+            "VMG": {
+                "target": 35.0,
+                "tolerance": 3.0
+            },
+            "CANT": {
+                "target": 6.0,
+                "tolerance": 1.0
+            },
+            "CANT Drop Target": {
+                "target": 2.0,
+                "tolerance": 0.5
+            },
+            "Ride Height": {
+                "target": 350.0,
+                "tolerance": 50.0
+            },
+            "Rudder Average": {
+                "target": 0.0,
+                "tolerance": 1.0
+            },
+            "Rudder Differential": {
+                "target": 2.0,
+                "tolerance": 0.5
+            },
+            "Camber (CA1)": {
+                "target": 15.0,
+                "tolerance": 2.0
+            },
+            "Wing Twist": {
+                "target": 12.0,
+                "tolerance": 2.0
+            },
+            "Clew Position": {
+                "target": 750.0,
+                "tolerance": 50.0
+            },
+            "Wing Rotation": {
+                "target": 26.0,
+                "tolerance": 2.0
+            },
+            "Heel": {
+                "target": 4.0,
+                "tolerance": 1.0
+            },
+            "Pitch": {
+                "target": 1.0,
+                "tolerance": 0.3
+            }
+        }
+    }
+}
