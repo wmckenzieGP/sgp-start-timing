@@ -1,405 +1,398 @@
-"""
-Streamlit App for Sailing Performance Analysis
-Converts the HTML report generation to an interactive Streamlit dashboard
-"""
-
 import streamlit as st
 import polars as pl
 import pandas as pd
-from datetime import datetime, time
-import plots
-from data_fetcher import SGPDataProvider
-from bokeh.models import ColumnDataSource
-from bokeh.palettes import Category10
-import html_utils
-from streamlit_bokeh import streamlit_bokeh as st_bokeh
-import hashlib
+from datetime import datetime, timedelta, time as datetime_time
 import os
-from typing import List
+import json
+import time as time_lib
+import hashlib
+from data_fetcher import SGPDataProvider
+import utils as u
 
-# python -m streamlit run app.py
-# Fixed color mapping for boats/countries
-BOAT_COLORS = {
-    'NZL': "#07a0f9",
-    'SWE': "#ae10da",
-    'BRA': "#09f062",
-    'SUI': '#FF0000',
-    'CAN': "#19D1C2",
-    'DEN': "#5F0ED0",
-    'GBR': "#162446",
-    'ITA': "#168915",
-    'FRA': "#0A3DBE",
-    'USA': "#CDCA18",
-    'AUS': "#1C4D1C",
-    'ESP': "#E7170C",
-    'GER': "#DDEEEF",
-}
-
-def construct_color_map(color_bys: List[str], df: pl.DataFrame, y_cols: set[str] = None) -> dict:
-    color_bys_map = {}
-    
-    # Fixed color mapping for boats/countries
-    BOAT_COLORS = {
-        'NZL': "#07a0f9",     # Blue (New Zealand)
-        'SWE': "#ae10da",     # Purple (Sweden)
-        'BRA': "#09f062",     # Green (Brazil)
-        'SUI': '#FF0000',     # Red (Switzerland)
-        'CAN': "#19D1C2",     # Cyan (Canada)
-        'DEN': "#5F0ED0",     # Purple (Denmark)
-        'GBR': "#162446",     # Navy Blue (Great Britain)
-        'ITA': "#168915",     # Green (Italy)
-        'FRA': "#0A3DBE",     # Blue (France)
-        'USA': "#CDCA18",     # Yellow (United States)
-        'AUS': "#1C4D1C",     # Dark Green (Australia)
-        'ESP': "#E7170C",     # Red (Spain)
-        'GER': "#DDEEEF",     # Light Gray (Germany)
-    }
-    
-    for color_by in color_bys:
-        color_map = {}
-        if color_by == 'boat':
-            unique_boats = df.select(pl.col('boat')).unique().to_series().to_list()
-            # Use fixed colors for known boats, fallback to Category10 for unknown
-            palette = Category10[10]
-            color_map = {}
-            unknown_boat_idx = 0
-            for boat in unique_boats:
-                if boat in BOAT_COLORS:
-                    color_map[boat] = BOAT_COLORS[boat]
-                else:
-                    # For unknown boats, use palette colors
-                    color_map[boat] = palette[unknown_boat_idx % len(palette)]
-                    unknown_boat_idx += 1
-        elif color_by == 'sails':
-            unique_sails = df.select(pl.col('sails')).unique().to_series().to_list()
-            palette = Category10[10]
-            color_map = {sail: palette[i % len(palette)] for i, sail in enumerate(unique_sails)}
-        elif color_by in ['tack', 'entry_tack', 'exit_tack']:
-            df = df.with_columns(pl.lit(color_by).str.to_lowercase().alias(color_by))
-            color_map = {'port': "#ef0808", 'starboard': "#18d618"}
-        elif color_by == 'mean_tws':
-            color_map = {'color_bar': {"#b826e0": 0.286, "#3b18d9": 0.428, "#1ed918": 0.5714, "#edb50c": 0.714, '#ed2e0c': 1.0}, 
-                         'cols': {}}
-            min = 0
-            max = 21
-            # Print the cutoffs
-            color_range = color_map['color_bar']
-            color_legend = {}
-            for color, cutoff in color_range.items():
-                value = min + cutoff * (max - min)
-                color_legend[f"{round(value)} kts"] = color
-            color_map['color_legend'] = color_legend
-            color_map['cols']['mean_tws'] = {'min': min, 'max': max}
-        else:
-            if color_by in df.columns:
-                col_type = df.select(pl.col(color_by)).dtypes[0]
-                if col_type in [pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.Float32, pl.Float64]:
-                    color_map = 'color_bar'
-            else:
-                raise ValueError(f"Unknown color_by '{color_by}' or column does not exist in DataFrame.")
-        color_bys_map[color_by] = color_map
-    return color_bys_map
-
+# Set page configuration
 st.set_page_config(
-    page_title="Sailing Performance Analysis",
+    page_title="F50 Performance Comparison Dashboard",
     page_icon="assets/black_foils_logo.png",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Styling
+# Custom premium CSS styling
 st.markdown("""
     <style>
-    /* Main content area */
+    /* Dark premium layout background */
     .main {
-        padding: 0rem 1rem;
+        background-color: #0b0f19 !important;
+        color: #f1f5f9 !important;
+        padding-top: 1rem;
     }
     
-    /* Headers */
+    /* Clean sidebar styling */
+    [data-testid="stSidebar"] {
+        background-color: #0f172a !important;
+        border-right: 1px solid #1e293b;
+    }
+    
+    /* Typography */
     h1 {
-        font-weight: 600;
-        color: #ffffff;
-        margin-bottom: 1.5rem;
-        font-size: 2rem;
+        font-family: 'Outfit', 'Inter', sans-serif;
+        font-weight: 700;
+        font-size: 2.2rem;
+        background: linear-gradient(90deg, #38bdf8 0%, #a855f7 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0.5rem;
         letter-spacing: -0.5px;
     }
     
-    h2 {
-        font-weight: 500;
-        color: #e0e0e0;
-        margin-top: 2.5rem;
-        margin-bottom: 1rem;
-        font-size: 1.5rem;
-        letter-spacing: -0.3px;
-    }
-    
-    h3 {
-        font-weight: 500;
-        color: #c0c0c0;
-        margin-bottom: 0.75rem;
-        font-size: 1.2rem;
-    }
-    
-    /* Sidebar styling */
-    [data-testid="stSidebar"] {
-        background-color: #0e1117;
-        padding-top: 1rem;
-    }
-    
-    [data-testid="stSidebar"][aria-expanded="true"] {
-        min-width: 300px;
-        max-width: 300px;
-    }
-    
-    [data-testid="stSidebar"] .block-container {
-        padding-top: 1rem;
-        color: #ffffff;
-    }
-    
-    [data-testid="stSidebar"] h1 {
-        font-size: 1.3rem;
+    .category-header {
+        font-family: 'Outfit', 'Inter', sans-serif;
+        font-size: 1.25rem;
         font-weight: 600;
+        color: #f8fafc;
+        border-left: 4px solid #8b5cf6;
+        padding-left: 10px;
         margin-top: 1.5rem;
-        margin-bottom: 1rem;
-        letter-spacing: -0.3px;
-        color: #ffffff;
+        margin-bottom: 0.75rem;
+        letter-spacing: 0.2px;
     }
     
-    [data-testid="stSidebar"] h2 {
-        font-size: 1rem;
-        font-weight: 600;
-        color: #ffffff;
-        margin-top: 2rem;
-        margin-bottom: 1rem;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        font-size: 0.85rem;
-    }
-
-    [data-testid="stSidebar"] h3,
-    [data-testid="stSidebar"] h4,
-    [data-testid="stSidebar"] p,
-    [data-testid="stSidebar"] span,
-    [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] .stText,
-    [data-testid="stSidebar"] .stMarkdown,
-    [data-testid="stSidebar"] .stTextInput label,
-    [data-testid="stSidebar"] .stCheckbox label,
-    [data-testid="stSidebar"] .stRadio label,
-    [data-testid="stSidebar"] .stSelectbox label,
-    [data-testid="stSidebar"] .stMultiSelect label,
-    [data-testid="stSidebar"] .stDateInput label,
-    [data-testid="stSidebar"] .stTimeInput label,
-    [data-testid="stSidebar"] .stNumberInput label,
-    [data-testid="stSidebar"] .stSlider label,
-    [data-testid="stSidebar"] .stRadio > label,
-    [data-testid="stSidebar"] .stCheckbox > label {
-        color: #ffffff !important;
-    }
-
-    [data-testid="stSidebar"] .stSelectbox select,
-    [data-testid="stSidebar"] .stMultiSelect select {
-        color: #ffffff !important;
-    }
-
-    [data-testid="stSidebar"] .stDateInput input,
-    [data-testid="stSidebar"] .stTimeInput input,
-    [data-testid="stSidebar"] .stNumberInput input,
-    [data-testid="stSidebar"] .stTextInput input {
-        color: #000000 !important;
-    }
-    
-    /* Info boxes */
-    .stAlert {
-        border-radius: 8px;
-        border-left: 4px solid #4CAF50;
-        background-color: rgba(76, 175, 80, 0.1);
-    }
-    
-    /* Warning boxes */
-    .stWarning {
-        border-radius: 8px;
-        border-left: 4px solid #ff9800;
-        background-color: rgba(255, 152, 0, 0.1);
-    }
-    
-    /* Buttons */
-    .stButton>button {
-        border-radius: 6px;
-        font-weight: 500;
-        letter-spacing: 0.5px;
-        text-transform: uppercase;
-        font-size: 0.9rem;
-    }
-    
-    .stButton>button[kind="primary"] {
-        background: linear-gradient(90deg, #1976d2 0%, #2196f3 100%);
-        border: none;
-    }
-    
-    /* Metrics */
-    [data-testid="stMetricValue"] {
-        font-size: 1.8rem;
-        font-weight: 600;
-        color: #000000 !important;
-    }
-    
-    [data-testid="stMetricLabel"] {
-        font-size: 0.95rem;
-        font-weight: 500;
-        color: #333333 !important;
-    }
-
-    /* White-background tables and cards */
-    .stDataFrame, .stDataFrame td, .stDataFrame th,
-    .stTable, .stTable td, .stTable th {
-        color: #000000 !important;
-    }
-    
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2rem;
-        border-bottom: 2px solid #333;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        font-weight: 500;
-        font-size: 1rem;
-        padding: 0.75rem 1.5rem;
-    }
-    
-    .stTabs [data-baseweb="tab"]:hover {
-        background-color: rgba(255, 255, 255, 0.05);
-    }
-    
-    /* Input fields */
-    .stDateInput, .stTimeInput, .stSelectbox, .stMultiSelect {
-        margin-bottom: 1rem;
-    }
-    
-    /* Dataframes */
-    .stDataFrame {
-        border-radius: 8px;
-        overflow: hidden;
-    }
-    
-    /* Spacing */
-    .stHeader {
-        margin-bottom: 20px;
-    }
-    
-    .block-container {
-        padding-top: 2rem;
-        max-width: 100%;
-    }
-    
-    /* Radio buttons */
-    .stRadio > label {
-        font-weight: 500;
-        color: #e0e0e0;
-    }
-    
-    /* Captions */
-    .caption {
-        color: #000000 !important;
-        font-size: 0.9rem;
-    }
-    
-    /* Login page styling */
-    div[data-testid="column"]:has(input[type="password"]) {
-        background-color: rgba(30, 30, 30, 0.6);
-        padding: 2rem 2rem 2.5rem 2rem;
+    /* Target Comparison Card */
+    .target-card {
+        background: #1e293b;
         border-radius: 12px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+        padding: 16px;
+        margin-bottom: 12px;
+        border: 1px solid #334155;
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        transition: all 0.2s ease-in-out;
     }
-
-    /* Ensure form inputs have white background for readability */
+    
+    .target-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.3);
+        border-color: #475569;
+    }
+    
+    .target-info {
+        flex: 1;
+    }
+    
+    .target-name {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #94a3b8;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    .target-bounds {
+        margin-top: 6px;
+        font-size: 0.75rem;
+        color: #cbd5e1;
+        line-height: 1.4;
+    }
+    
+    .bound-row {
+        display: flex;
+        justify-content: space-between;
+        width: 130px;
+    }
+    
+    .bound-label {
+        color: #64748b;
+    }
+    
+    .bound-val {
+        font-weight: 500;
+        color: #cbd5e1;
+    }
+    
+    .value-box {
+        color: #ffffff;
+        font-weight: 700;
+        font-size: 1.5rem;
+        padding: 8px 12px;
+        border-radius: 8px;
+        min-width: 95px;
+        text-align: center;
+        box-shadow: inset 0 2px 4px 0 rgba(0,0,0,0.2);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+    }
+    
+    .value-box.green {
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        border: 1px solid #34d399;
+    }
+    
+    .value-box.orange {
+        background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        border: 1px solid #fbbf24;
+    }
+    
+    .value-box.red {
+        background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%);
+        border: 1px solid #f87171;
+    }
+    
+    .value-box.grey {
+        background: linear-gradient(135deg, #475569 0%, #334155 100%);
+        border: 1px solid #64748b;
+    }
+    
+    .status-badge {
+        font-size: 0.6rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        opacity: 0.95;
+        margin-top: 2px;
+    }
+    
+    /* Form inputs styling */
     input[type="text"],
-    input[type="password"],
     input[type="number"],
-    textarea,
     select,
     .stTextInput input,
     .stNumberInput input,
-    .stDateInput input,
-    .stTimeInput input,
-    .stTextArea textarea,
     .stSelectbox select,
     .stMultiSelect select {
-        background-color: #ffffff !important;
-        color: #000000 !important;
+        background-color: #1e293b !important;
+        color: #ffffff !important;
+        border: 1px solid #475569 !important;
     }
-
-    /* Placeholder text color for better contrast */
-    ::placeholder {
-        color: #666666 !important;
-        opacity: 1 !important;
+    
+    /* Data editor override for visibility */
+    .stDataFrame {
+        border-radius: 8px;
+        border: 1px solid #334155;
     }
     </style>
 """, unsafe_allow_html=True)
 
+# Presets Management System
+PRESETS_FILE = "presets.json"
+
+DEFAULT_PRESETS = {
+    "TWS 10-15 kts": {
+        "upwind": {
+            "BSP": {"target": 35.0, "tolerance": 2.0},
+            "TWA": {"target": 45.0, "tolerance": 3.0},
+            "VMG": {"target": 25.0, "tolerance": 2.0},
+            "CANT": {"target": 4.0, "tolerance": 1.0},
+            "CANT Drop Target": {"target": 1.5, "tolerance": 0.5},
+            "Ride Height": {"target": 250.0, "tolerance": 50.0},
+            "Rudder Average": {"target": 0.0, "tolerance": 1.0},
+            "Rudder Differential": {"target": 1.5, "tolerance": 0.5},
+            "Camber (CA1)": {"target": 12.0, "tolerance": 2.0},
+            "Wing Twist": {"target": 8.0, "tolerance": 1.5},
+            "Clew Position": {"target": 850.0, "tolerance": 50.0},
+            "Wing Rotation": {"target": 22.0, "tolerance": 2.0},
+            "Heel": {"target": 3.0, "tolerance": 1.0},
+            "Pitch": {"target": 0.5, "tolerance": 0.3}
+        },
+        "downwind": {
+            "BSP": {"target": 45.0, "tolerance": 3.0},
+            "TWA": {"target": 140.0, "tolerance": 5.0},
+            "VMG": {"target": 35.0, "tolerance": 3.0},
+            "CANT": {"target": 6.0, "tolerance": 1.0},
+            "CANT Drop Target": {"target": 2.0, "tolerance": 0.5},
+            "Ride Height": {"target": 350.0, "tolerance": 50.0},
+            "Rudder Average": {"target": 0.0, "tolerance": 1.0},
+            "Rudder Differential": {"target": 2.0, "tolerance": 0.5},
+            "Camber (CA1)": {"target": 15.0, "tolerance": 2.0},
+            "Wing Twist": {"target": 12.0, "tolerance": 2.0},
+            "Clew Position": {"target": 750.0, "tolerance": 50.0},
+            "Wing Rotation": {"target": 26.0, "tolerance": 2.0},
+            "Heel": {"target": 4.0, "tolerance": 1.0},
+            "Pitch": {"target": 1.0, "tolerance": 0.3}
+        }
+    },
+    "Auckland Day 1": {
+        "upwind": {
+            "BSP": {"target": 36.5, "tolerance": 1.5},
+            "TWA": {"target": 46.5, "tolerance": 2.0},
+            "VMG": {"target": 26.0, "tolerance": 1.5},
+            "CANT": {"target": 4.2, "tolerance": 0.8},
+            "CANT Drop Target": {"target": 1.4, "tolerance": 0.4},
+            "Ride Height": {"target": 230.0, "tolerance": 40.0},
+            "Rudder Average": {"target": 0.2, "tolerance": 0.8},
+            "Rudder Differential": {"target": 1.6, "tolerance": 0.4},
+            "Camber (CA1)": {"target": 12.5, "tolerance": 1.5},
+            "Wing Twist": {"target": 8.5, "tolerance": 1.0},
+            "Clew Position": {"target": 830.0, "tolerance": 40.0},
+            "Wing Rotation": {"target": 21.5, "tolerance": 1.5},
+            "Heel": {"target": 3.2, "tolerance": 0.8},
+            "Pitch": {"target": 0.4, "tolerance": 0.2}
+        },
+        "downwind": {
+            "BSP": {"target": 47.0, "tolerance": 2.5},
+            "TWA": {"target": 137.5, "tolerance": 4.0},
+            "VMG": {"target": 37.0, "tolerance": 2.5},
+            "CANT": {"target": 5.8, "tolerance": 0.8},
+            "CANT Drop Target": {"target": 1.8, "tolerance": 0.4},
+            "Ride Height": {"target": 320.0, "tolerance": 40.0},
+            "Rudder Average": {"target": 0.1, "tolerance": 0.8},
+            "Rudder Differential": {"target": 1.8, "tolerance": 0.4},
+            "Camber (CA1)": {"target": 14.5, "tolerance": 1.5},
+            "Wing Twist": {"target": 11.5, "tolerance": 1.5},
+            "Clew Position": {"target": 780.0, "tolerance": 40.0},
+            "Wing Rotation": {"target": 25.0, "tolerance": 1.5},
+            "Heel": {"target": 3.8, "tolerance": 0.8},
+            "Pitch": {"target": 0.9, "tolerance": 0.2}
+        }
+    }
+}
+
+def load_presets():
+    if not os.path.exists(PRESETS_FILE):
+        try:
+            with open(PRESETS_FILE, "w") as f:
+                json.dump(DEFAULT_PRESETS, f, indent=4)
+            return DEFAULT_PRESETS
+        except:
+            return DEFAULT_PRESETS
+    try:
+        with open(PRESETS_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return DEFAULT_PRESETS
+
+def save_presets(presets):
+    try:
+        with open(PRESETS_FILE, "w") as f:
+            json.dump(presets, f, indent=4)
+        return True
+    except Exception as e:
+        st.error(f"Error saving presets: {e}")
+        return False
+
+# Target definition mapping in Polars periods dataframe
+TARGETS_METADATA = {
+    "BSP": {"col": "bsp_mean", "unit": "kts", "format": "{:.1f}"},
+    "TWA": {"col": "twa_n_mean", "unit": "°", "format": "{:.1f}"},
+    "VMG": {"col": "vmg_mean", "unit": "kts", "format": "{:.1f}"},
+    "CANT": {"col": "leeward_cant_mean", "unit": "°", "format": "{:.1f}"},
+    "CANT Drop Target": {"col": "target_db_cant_drop_mean", "unit": "°", "format": "{:.1f}"}, # Dynamic mapping
+    "Ride Height": {"col": "foil_leeward_sink_mean", "unit": "mm", "format": "{:.0f}"},
+    "Rudder Average": {"col": "rudder_angle_n_mean", "unit": "°", "format": "{:.1f}"},
+    "Rudder Differential": {"col": "rudder_diff_tack_mean", "unit": "°", "format": "{:.1f}"},
+    "Camber (CA1)": {"col": "cam1_angle_n_mean", "unit": "°", "format": "{:.1f}"},
+    "Wing Twist": {"col": "wing_twist_n_mean", "unit": "°", "format": "{:.1f}"},
+    "Clew Position": {"col": "wing_clew_mean", "unit": "mm", "format": "{:.0f}"},
+    "Wing Rotation": {"col": "wing_rotation_n_mean", "unit": "°", "format": "{:.1f}"},
+    "Heel": {"col": "heel_n_mean", "unit": "°", "format": "{:.1f}"},
+    "Pitch": {"col": "trim_mean", "unit": "°", "format": "{:.1f}"}
+}
+
+def get_column_for_target(target_name, upwind):
+    if target_name == "CANT Drop Target":
+        return "target_db_cant_drop_upw_mean" if upwind else "target_db_cant_drop_dw_mean"
+    return TARGETS_METADATA[target_name]["col"]
+
+def get_status_color(value, target, tolerance):
+    if value is None or pd.isna(value):
+        return "grey", "N/A"
+    diff = abs(value - target)
+    if tolerance <= 0:
+        return "green" if diff <= 0.05 else "red", "ON TGT" if diff <= 0.05 else "OUT"
+    if diff <= tolerance:
+        return "green", "ON TGT"
+    elif diff <= 1.5 * tolerance:
+        return "orange", "EDGE"
+    else:
+        return "red", "OUT"
+
+def render_target_card(name, value, target, tolerance, unit_str, format_str):
+    color, status_text = get_status_color(value, target, tolerance)
+    
+    if value is not None and not pd.isna(value):
+        val_display = format_str.format(value) + " " + unit_str
+    else:
+        val_display = "N/A"
+        
+    upper_bound = target + tolerance
+    lower_bound = target - tolerance
+    
+    tgt_display = format_str.format(target) + " " + unit_str
+    upper_display = format_str.format(upper_bound) + " " + unit_str
+    lower_display = format_str.format(lower_bound) + " " + unit_str
+    
+    html = f"""
+    <div class="target-card">
+        <div class="target-info">
+            <div class="target-name">{name}</div>
+            <div class="target-bounds">
+                <div class="bound-row">
+                    <span class="bound-label">Target:</span>
+                    <span class="bound-val">{tgt_display}</span>
+                </div>
+                <div class="bound-row">
+                    <span class="bound-label">Upper:</span>
+                    <span class="bound-val">{upper_display}</span>
+                </div>
+                <div class="bound-row">
+                    <span class="bound-label">Lower:</span>
+                    <span class="bound-val">{lower_display}</span>
+                </div>
+            </div>
+        </div>
+        <div class="value-box {color}">
+            <div style="font-size: 1.15rem; font-weight: 700;">{val_display}</div>
+            <div class="status-badge">{status_text}</div>
+        </div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+# Login System
 def check_password():
     """Returns `True` if the user has entered the correct password."""
-    
     def password_entered():
-        """Checks whether a password entered by the user is correct."""
-        # Get credentials from environment variables
         correct_username = os.getenv("APP_USERNAME")
         correct_password = os.getenv("APP_PASSWORD")
         
-        # Check if credentials are configured
         if not correct_username or not correct_password:
             st.session_state["password_correct"] = False
             st.session_state["credentials_missing"] = True
             return
         
         st.session_state["credentials_missing"] = False
-        
-        # Hash the entered password for comparison
         entered_password_hash = hashlib.sha256(st.session_state["password"].encode()).hexdigest()
         correct_password_hash = hashlib.sha256(correct_password.encode()).hexdigest()
         
         if (st.session_state["username"] == correct_username and 
             entered_password_hash == correct_password_hash):
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Don't store password
-            del st.session_state["username"]  # Don't store username
+            del st.session_state["password"]
+            del st.session_state["username"]
         else:
             st.session_state["password_correct"] = False
             st.session_state["login_attempts"] = st.session_state.get("login_attempts", 0) + 1
 
-    # First run, show login form
     if "password_correct" not in st.session_state:
-        # Add spacing from top
         st.markdown("<br><br><br>", unsafe_allow_html=True)
-        
-        # Center the login form
         col1, col2, col3 = st.columns([1, 1, 1])
-        
         with col2:
             st.image("assets/black_foils_logo.png", use_container_width=True)
-            st.markdown("<h2 style='text-align: center; margin: 2rem 0 1.5rem 0;'>Login</h2>", unsafe_allow_html=True)
-            
+            st.markdown("<h2 style='text-align: center; margin: 2rem 0 1.5rem 0; color:#fff;'>Login</h2>", unsafe_allow_html=True)
             st.text_input("Username", key="username", placeholder="Enter username")
             st.text_input("Password", type="password", key="password", placeholder="Enter password")
             st.button("Login", on_click=password_entered, use_container_width=True, type="primary")
-        
         return False
     
-    # Password not correct, show input + error
     elif not st.session_state["password_correct"]:
-        # Add spacing from top
         st.markdown("<br><br><br>", unsafe_allow_html=True)
-        
-        # Center the login form
         col1, col2, col3 = st.columns([1, 1, 1])
-        
         with col2:
             st.image("assets/black_foils_logo.png", use_container_width=True)
-            st.markdown("<h2 style='text-align: center; margin: 2rem 0 1.5rem 0;'>Login</h2>", unsafe_allow_html=True)
-            
-            # Show appropriate error message
+            st.markdown("<h2 style='text-align: center; margin: 2rem 0 1.5rem 0; color:#fff;'>Login</h2>", unsafe_allow_html=True)
             if st.session_state.get("credentials_missing"):
                 st.error("⚠️ Server configuration error: Login credentials not set. Please contact administrator.")
             else:
@@ -412,613 +405,419 @@ def check_password():
             st.text_input("Username", key="username", placeholder="Enter username")
             st.text_input("Password", type="password", key="password", placeholder="Enter password")
             st.button("Login", on_click=password_entered, use_container_width=True, type="primary")
-        
         return False
     
-    # Password correct
     return True
 
+# Main Dashboard Function
 def main():
-    # Sidebar configuration
+    # Setup session times
+    if 'session_start_time' not in st.session_state:
+        st.session_state['session_start_time'] = time_lib.time()
+
+    # Load presets
+    presets = load_presets()
+
+    # Sidebar Controls
     with st.sidebar:
         st.image("assets/black_foils_logo.png", use_container_width=True)
-        st.title("Configuration")
+        st.title("Settings")
         
-        # Report parameters
-        st.subheader("Report Parameters")
+        # 1. Preset Parameters Selector
+        st.subheader("Target Presets")
+        preset_names = list(presets.keys())
+        active_preset_name = st.selectbox("Active Preset", options=preset_names, index=0)
         
-        # Date inputs
-        col1, col2 = st.columns(2)
-        with col1:
-            start_date = st.date_input(
-                "Start Date",
-                value=datetime(2026, 1, 17),
-                help="Select the start date for the report"
-            )
-        with col2:
-            end_date = st.date_input(
-                "End Date",
-                value=datetime(2026, 1, 17),
-                help="Select the end date for the report"
-            )
-        
-        # Time inputs
-        col3, col4 = st.columns(2)
-        with col3:
-            start_time_str = st.text_input(
-                "Start Time (UTC)",
-                value="03:00",
-                help="Start time in UTC (HH:MM or HH:MM:SS)"
-            )
-        with col4:
-            end_time_str = st.text_input(
-                "End Time (UTC)",
-                value="23:59",
-                help="End time in UTC (HH:MM or HH:MM:SS)"
-            )
-        
-        # Parse time strings
-        def parse_time(time_str, default_time):
-            try:
-                return datetime.strptime(time_str.strip(), "%H:%M").time()
-            except ValueError:
-                try:
-                    return datetime.strptime(time_str.strip(), "%H:%M:%S").time()
-                except ValueError:
-                    return default_time
-        
-        start_time = parse_time(start_time_str, time(3, 0))
-        end_time = parse_time(end_time_str, time(23, 59))
-        
-        # Boat selection
-        boats = st.multiselect(
-            "Select Boats",
-            options=BOAT_COLORS.keys(),
-            default=["NZL"],
-            help="Select one or more boats to analyze"
-        )
-        
-        # Race number (optional)
-        race_num = st.number_input(
-            "Race Number (Optional)",
-            min_value=1,
-            value=None,
-            help="Leave empty for full day analysis"
-        )
+        # Keep track of active preset
+        if 'active_preset_name' not in st.session_state or st.session_state['active_preset_name'] != active_preset_name:
+            st.session_state['active_preset_name'] = active_preset_name
+            # Sync parameters to temporary session state for editing
+            st.session_state['current_parameters'] = presets[active_preset_name]
 
-        period_duration = st.slider(
-            "Period Duration (seconds)",
-            min_value=2,
-            max_value=20,
-            value=6,
-            step=1,
-            help="Set the window size used to convert 'good' straight-line periods into report data points. Smaller values produce more points."
-        )
+        # 2. Data Mode selector
+        st.subheader("Data Extraction Mode")
+        data_mode = st.radio("Extraction Mode", ["Live / Rolling Window", "Historical Range"], horizontal=True)
         
-        # Filters
-        st.subheader("Filters")
-        st.caption("Adjust these filters to update plots")
+        # Mode options
+        is_live = (data_mode == "Live / Rolling Window")
         
-        filter_score_maneuvers = st.slider(
-            "Maneuver Filter Score",
-            min_value=0,
-            max_value=100,
-            value=0,
-            help="Minimum quality score for maneuvers (0-100)"
-        )
+        if is_live:
+            rolling_window = st.slider("Rolling Window (minutes)", min_value=1, max_value=60, value=5)
+            refresh_rate = st.slider("Refresh Rate (seconds)", min_value=5, max_value=60, value=5)
+            auto_refresh = st.checkbox("Enable Auto-Refresh", value=True)
+            
+            # Replay Demo mode toggle
+            demo_mode = st.checkbox("Demo Mode (Replay Auckland)", value=True, help="Replays active Auckland sailing data. Recommended if no live event is active.")
+        else:
+            demo_mode = False
+            auto_refresh = False
+            
+            # Date/Time selector
+            col1, col2 = st.columns(2)
+            with col1:
+                start_date = st.date_input("Start Date", value=datetime(2026, 1, 17))
+            with col2:
+                end_date = st.date_input("End Date", value=datetime(2026, 1, 17))
+                
+            col3, col4 = st.columns(2)
+            with col3:
+                start_time_str = st.text_input("Start (UTC)", value="04:15:00")
+            with col4:
+                end_time_str = st.text_input("End (UTC)", value="05:10:00")
+                
+            def parse_time(t_str, default_t):
+                try:
+                    return datetime.strptime(t_str.strip(), "%H:%M:%S").time()
+                except ValueError:
+                    try:
+                        return datetime.strptime(t_str.strip(), "%H:%M").time()
+                    except ValueError:
+                        return default_t
+            
+            start_time = parse_time(start_time_str, datetime_time(4, 15, 0))
+            end_time = parse_time(end_time_str, datetime_time(5, 10, 0))
+            
+            start_datetime = datetime.combine(start_date, start_time)
+            end_datetime = datetime.combine(end_date, end_time)
+
+        # 3. Sailing Filters
+        st.subheader("Sailing Parameters")
+        boat_choice = st.selectbox("Selected Boat", ["NZL", "SWE", "BRA", "SUI", "CAN", "DEN", "GBR", "ITA", "FRA", "USA", "AUS", "ESP", "GER"], index=0)
         
-        min_pct_vmg_upw = st.slider(
-            "Min % VMG Upwind",
-            min_value=0,
-            max_value=100,
-            value=40,
-            help="Minimum percentage VMG for upwind periods"
-        )
+        # Upwind vs Downwind Toggle
+        sailing_direction = st.radio("Sailing Direction", ["Upwind", "Downwind"], horizontal=True)
+        upwind_mode = (sailing_direction == "Upwind")
         
-        min_pct_vmg_dw = st.slider(
-            "Min % VMG Downwind",
-            min_value=0,
-            max_value=100,
-            value=40,
-            help="Minimum percentage VMG for downwind periods"
-        )
+        period_duration = st.slider("Period Duration (seconds)", min_value=2, max_value=20, value=6)
         
-        min_bsp_upwind = st.slider(
-            "Min BSP Upwind Periods",
-            min_value=0,
-            max_value=50,
-            value=30,
-            help="Minimum boat speed (knots) required to detect upwind straight-line periods"
-        )
+        min_bsp_val = st.slider("Min BSP Threshold (kts)", min_value=0, max_value=50, value=30)
+        min_vmg_pct = st.slider("Min % VMG Target", min_value=0, max_value=100, value=40)
         
-        min_bsp_downwind = st.slider(
-            "Min BSP Downwind Periods",
-            min_value=0,
-            max_value=50,
-            value=30,
-            help="Minimum boat speed (knots) required to detect downwind straight-line periods"
-        )
-        
-        min_bsp_reaching = st.slider(
-            "Min BSP Reaching",
-            min_value=0,
-            max_value=50,
-            value=20,
-            help="Minimum boat speed for reaching periods (knots)"
-        )
-        
-        # Generate button
-        generate_report = st.button("Generate Report", type="primary", use_container_width=True)
-        
-        # Logout button at the bottom
+        # Preset Management Options (Create / Delete)
+        st.subheader("Manage Presets")
+        new_preset_name = st.text_input("New Preset Name", placeholder="e.g. TWS 15-20 kts")
+        if st.button("Save Current Parameters as New Preset", use_container_width=True):
+            if new_preset_name.strip():
+                # Get parameters from st.session_state['current_parameters']
+                presets[new_preset_name] = st.session_state['current_parameters']
+                if save_presets(presets):
+                    st.success(f"Preset '{new_preset_name}' created!")
+                    st.session_state['active_preset_name'] = new_preset_name
+                    st.rerun()
+            else:
+                st.error("Please enter a valid preset name.")
+                
+        if st.button("Delete Selected Preset", use_container_width=True):
+            if active_preset_name in presets:
+                if len(presets) <= 1:
+                    st.error("Cannot delete the last remaining preset.")
+                else:
+                    del presets[active_preset_name]
+                    if save_presets(presets):
+                        st.success(f"Preset '{active_preset_name}' deleted.")
+                        # Fallback to first preset
+                        st.session_state['active_preset_name'] = list(presets.keys())[0]
+                        st.rerun()
+
+        # Logout option
         st.markdown("<br><br>", unsafe_allow_html=True)
         if st.button("Logout", use_container_width=True):
             st.session_state["password_correct"] = False
             st.rerun()
+
+    # Title area
+    st.markdown("<h1>F50 Performance Comparison Dashboard</h1>", unsafe_allow_html=True)
+    st.caption(f"Analyzing boat performance against targets in real time. Active Preset: **{active_preset_name}** | Mode: **{sailing_direction}**")
     
-    # Main content area
-    if not boats:
-        st.warning("Please select at least one boat from the sidebar to generate the report.")
-        return
+    # ------------------
+    # Data Fetch Pipeline
+    # ------------------
+    periods_df = pl.DataFrame()
+    raw_df_rows = 0
+    data_source_label = ""
     
-    # Combine date and time
-    start_datetime = datetime.combine(start_date, start_time)
-    end_datetime = datetime.combine(end_date, end_time)
-    
-    # Format for API
-    start_time_str = start_datetime.strftime("%Y-%m-%dT%H:%M:%SZ")
-    end_time_str = end_datetime.strftime("%Y-%m-%dT%H:%M:%SZ")
-    
-    st.info(f"Analysis Period: {start_datetime.strftime('%B %d, %Y %H:%M')} - {end_datetime.strftime('%B %d, %Y %H:%M')} UTC")
-    
-    # Only fetch data when Generate Report is clicked
-    if generate_report:
-        with st.spinner("Fetching and processing data..."):
-            try:
-                # Fetch data
-                periods_list = []
-                maneuvers_list = []
-                maneuver_timeseries_list = []
-                
-                for boat in boats:
-                    fetcher = SGPDataProvider(boat=boat)
-                    df = fetcher.get_data(start_time_str, end_time_str)
-                    st.success(f"Fetched data for {boat}: {df.height} rows")
-                    
-                    fetcher.process_data(
-                        df,
-                        race_num=race_num,
+    if demo_mode:
+        data_source_label = "Demo Data (Auckland Day 1 Replay)"
+        
+        # Check if full Auckland Day 1 is loaded, if not fetch it
+        # Auckland Replay range: 04:10 to 05:15
+        if 'demo_raw_df' not in st.session_state:
+            with st.spinner("Loading Auckland Day 1 replay data from InfluxDB (approx. 30s)..."):
+                try:
+                    fetcher = SGPDataProvider(boat=boat_choice)
+                    st.session_state['demo_raw_df'] = fetcher.get_data("2026-01-17T04:10:00Z", "2026-01-17T05:15:00Z")
+                except Exception as e:
+                    st.error(f"Error loading demo data: {e}")
+                    return
+        
+        # Re-process caching based on period parameters
+        filter_hash = hash((period_duration, min_bsp_val))
+        if st.session_state.get('demo_filter_hash') != filter_hash or 'demo_periods_df' not in st.session_state:
+            st.session_state['demo_filter_hash'] = filter_hash
+            if 'demo_raw_df' in st.session_state and st.session_state['demo_raw_df'].height > 0:
+                with st.spinner("Processing demo sailing data straight lines..."):
+                    fetcher = SGPDataProvider(boat=boat_choice)
+                    processed_df = fetcher.process_data(
+                        st.session_state['demo_raw_df'],
+                        race_num=None,
                         period_duration=period_duration,
-                        min_speed_upwind=min_bsp_upwind,
-                        min_speed_downwind=min_bsp_downwind,
+                        min_speed_upwind=min_bsp_val,
+                        min_speed_downwind=min_bsp_val
                     )
-                    periods_list.append(fetcher.periods)
-                    maneuvers_list.append(fetcher.maneuvers)
-                    maneuver_timeseries_list.append(fetcher.maneuver_timeseries)
+                    st.session_state['demo_periods_df'] = fetcher.periods
+            else:
+                st.session_state['demo_periods_df'] = pl.DataFrame()
                 
-                # Concatenate all data
-                periods = pl.concat(periods_list, how='diagonal_relaxed') if periods_list else pl.DataFrame()
-                maneuvers = pl.concat(maneuvers_list, how='diagonal_relaxed') if maneuvers_list else pl.DataFrame()
-                maneuver_timeseries = pl.concat(maneuver_timeseries_list, how='diagonal_relaxed') if maneuver_timeseries_list else pl.DataFrame()
-                
-                # Store in session state - raw unfiltered data
-                st.session_state['data_loaded'] = True
-                st.session_state['raw_periods'] = periods
-                st.session_state['raw_maneuvers'] = maneuvers
-                st.session_state['raw_maneuver_timeseries'] = maneuver_timeseries
-                st.session_state['boats'] = boats
-                
-            except Exception as e:
-                st.error(f"Error fetching data: {str(e)}")
-                return
-
-    # Display data if loaded (filters are applied here, not during data fetch)
-    if 'data_loaded' in st.session_state:
-        # Get raw data from session state
-        periods = st.session_state['raw_periods']
-        maneuvers = st.session_state['raw_maneuvers']
-        maneuver_timeseries = st.session_state['raw_maneuver_timeseries']
+        # Calculate sliding virtual clock
+        AUCKLAND_START = datetime(2026, 1, 17, 4, 15, 19)
+        AUCKLAND_END = datetime(2026, 1, 17, 5, 8, 48)
+        auckland_duration_sec = (AUCKLAND_END - AUCKLAND_START).total_seconds()
         
-        # Summary Section
-        st.header("Report Summary")
+        elapsed = time_lib.time() - st.session_state['session_start_time']
+        virtual_end_time = AUCKLAND_START + timedelta(seconds=(elapsed % auckland_duration_sec))
+        virtual_start_time = virtual_end_time - timedelta(minutes=rolling_window)
         
-        if not periods.is_empty():
-            # Create summary metrics
-            cols = st.columns(4)
+        # Extract periods within the virtual rolling window
+        all_periods = st.session_state.get('demo_periods_df', pl.DataFrame())
+        if not all_periods.is_empty():
+            periods_df = all_periods.filter(
+                (pl.col("timestamp") >= virtual_start_time) & 
+                (pl.col("timestamp") <= virtual_end_time)
+            )
+            raw_df_rows = st.session_state['demo_raw_df'].height
+            st.success(f"🔴 Live Simulating: Virtual Time is **{virtual_end_time.strftime('%H:%M:%S')}** (Window: last {rolling_window} min)")
+        else:
+            st.warning("No periods computed in demo data.")
             
-            for idx, boat in enumerate(boats):
-                with cols[idx % 4]:
-                    boat_periods = periods.filter(pl.col('boat') == boat)
-                    upw_periods = boat_periods.filter(pl.col('upwind'))
-                    dw_periods = boat_periods.filter(pl.col('downwind'))
-                    
-                    # Check if reaching column exists
-                    if 'reaching' in periods.columns:
-                        reach_periods = boat_periods.filter(pl.col('reaching'))
-                        caption = f"Upwind: {len(upw_periods)} | Downwind: {len(dw_periods)} | Reaching: {len(reach_periods)}"
-                    else:
-                        caption = f"Upwind: {len(upw_periods)} | Downwind: {len(dw_periods)}"
-                    
-                    st.metric(
-                        label=f"{boat}",
-                        value=f"{len(boat_periods)} periods"
-                    )
-                    st.caption(caption)
-        
-        if not maneuvers.is_empty():
-            st.subheader("Maneuvers Summary")
-            cols = st.columns(4)
-            
-            for idx, boat in enumerate(boats):
-                with cols[idx % 4]:
-                    boat_maneuvers = maneuvers.filter(pl.col('boat') == boat)
-                    tacks = boat_maneuvers.filter(pl.col('maneuver_type') == 'Tack')
-                    gybes = boat_maneuvers.filter(pl.col('maneuver_type') == 'Gybe')
-                    
-                    st.metric(
-                        label=f"{boat} Maneuvers",
-                        value=f"{len(boat_maneuvers)}"
-                    )
-                    st.caption(f"Tacks: {len(tacks)} | Gybes: {len(gybes)}")
-        
-        # Tabs for different analysis sections
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Upwind Analysis", "Downwind Analysis", "Reaching Analysis", "Maneuvers", "Raw Data"])
-        
-        with tab1:
-            display_period_analysis(periods, "upwind", min_pct_vmg_upw, boats)
-        
-        with tab2:
-            display_period_analysis(periods, "downwind", min_pct_vmg_dw, boats)
-        
-        with tab3:
-            display_period_analysis(periods, "reaching", min_bsp_reaching, boats)
-        
-        with tab4:
-            display_maneuver_analysis(maneuvers, maneuver_timeseries, filter_score_maneuvers, boats)
-        
-        with tab5:
-            display_raw_data(periods, maneuvers)
-    
     else:
-        # Welcome message
-        st.markdown("""
-        **To get started:**
-        1. Configure your parameters in the sidebar
-        2. Click the "Generate Report" button
-        3. Explore the interactive charts and data
-        
-        ---
-        """)
+        # Real query mode
+        if is_live:
+            # Query from now - rolling window to now
+            end_dt = datetime.utcnow()
+            start_dt = end_dt - timedelta(minutes=rolling_window)
+            start_str = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            end_str = end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            data_source_label = f"Live InfluxDB (Last {rolling_window} mins)"
+        else:
+            start_str = start_datetime.strftime("%Y-%m-%dT%H:%M:%SZ")
+            end_str = end_datetime.strftime("%Y-%m-%dT%H:%M:%SZ")
+            data_source_label = f"Historical Range ({start_time_str} - {end_time_str} UTC)"
 
-
-def display_period_analysis(periods, segment, min_pct_vmg, boats):
-    """Display period analysis for upwind/downwind/reaching - shows all plots with default metrics"""
-    st.header(f"{segment.capitalize()} Performance Analysis")
-    
-    if periods.is_empty():
-        st.warning(f"No {segment} period data available.")
-        return
-
-    filtering_col = 'tgt_vmg_percent_mean' if segment != 'reaching' else 'bsp_mean'
-    segment_col = segment
-
-    if segment_col not in periods.columns:
-        st.warning(f"The '{segment}' column is not available in the data. This may be due to the data format or period detection settings.")
-        return
-    
-    segment_periods = periods.filter(
-        pl.col(segment_col) & (pl.col(filtering_col) >= min_pct_vmg)
-    )
-    
-    if segment_periods.is_empty():
-        st.warning(f"No {segment} periods meet the filter criteria.")
-        return
-    
-    # Setup color mapping (done once for all plots)
-    period_color_bys = {'boat'}
-    period_color_map = construct_color_map(period_color_bys, segment_periods)
-    period_symbol_map = {'port': 's', 'starboard': 'o'}
-    segment_periods = html_utils.add_colors_symbols_to_df_multi(
-        segment_periods, 
-        color_map=period_color_map, 
-        color_bys=period_color_bys, 
-        symbol_map=period_symbol_map, 
-        symbol_by='tack'
-    )
-    
-    # Convert to pandas once for reuse  
-    segment_periods_pd = segment_periods.to_pandas()
-    
-    # Default metrics from build_daily_report.py
-    boat_state_cols = ['bsp_mean', 'twa_n_mean', 'vmg_mean', 'heel_n_mean', 'trim_mean', 'heel_mean',
-                       'foil_leeward_sink_mean', 'bow_sink_mean', 'leeward_rudder_immersion_mean',
-                       'leeway_n_mean', 'rudder_angle_n_mean', 'leeward_effective_cant_mean', 
-                       'leeward_cant_mean', 'leeward_flap_mean', 'leeward_rake_mean', 
-                       'leeward_rake_aoa_mean', 'leeward_rudder_rake_mean', 'windward_rudder_rake_mean']
-    
-    wing_trim_cols = ['wing_twist_n_mean', 'wing_rotation_n_mean', 'clew_angle_n_mean', 
-                      'cam1_angle_n_mean', 'cam2_angle_n_mean', 'cam3_angle_n_mean', 
-                      'cam4_angle_n_mean', 'cam5_angle_n_mean', 'cam6_angle_n_mean']
-    
-    jib_trim_cols = ['jib_lead_percent_mean', 'jib_sheet_percent_mean', 'jib_sheet_angle_mean', 
-                     'jib_cunningham_load_mean', 'jib_sheet_load_mean']
-    
-    variability_cols = ['wing_twist_std', 'wing_twist_total_var', 'wing_rotation_std', 
-                        'wing_rotation_total_var', 'bsp_std', 'bsp_total_var', 'twa_std', 
-                        'twa_total_var', 'heel_std', 'heel_total_var', 'trim_std', 'trim_total_var', 
-                        'leeward_rudder_immersion_std', 'leeward_rudder_immersion_total_var', 
-                        'rudder_angle_n_std', 'rudder_angle_n_total_var', 'leeward_cant_std', 
-                        'leeward_cant_total_var', 'leeward_flap_std', 'leeward_flap_total_var', 
-                        'leeward_rudder_rake_std', 'leeward_rudder_rake_total_var', 
-                        'windward_rudder_rake_std', 'windward_rudder_rake_total_var', 
-                        'jib_sheet_percent_std', 'jib_sheet_percent_total_var', 
-                        'jib_sheet_angle_std', 'jib_sheet_angle_total_var']
-    
-    # Filter to only available columns
-    boat_state_cols = [col for col in boat_state_cols if col in segment_periods.columns]
-    wing_trim_cols = [col for col in wing_trim_cols if col in segment_periods.columns]
-    jib_trim_cols = [col for col in jib_trim_cols if col in segment_periods.columns]
-    variability_cols = [col for col in variability_cols if col in segment_periods.columns]
-    
-    # Combine all scatter plot columns
-    all_scatter_cols = boat_state_cols + wing_trim_cols + jib_trim_cols + variability_cols
-
-    # Create a shared ColumnDataSource for all plots to enable linked selection
-    shared_source = ColumnDataSource(segment_periods_pd)
-    
-    # Combined plots with shared selection
-    st.subheader("Performance Analysis")
-    st.info("Lasso Select is active by default. Select data points to synchronize the selection across all plots below.")
-    
-    # Use bsp_mean for reaching, tgt_vmg_percent_mean for upwind/downwind
-    box_plot_y_col = 'bsp_mean' if segment == 'reaching' else 'tgt_vmg_percent_mean'
-    
-    if box_plot_y_col in segment_periods.columns and 'tws_mean' in segment_periods.columns and all_scatter_cols:
-        st_bokeh(
-            plots.combined_period_plots(
-                source=shared_source,
-                y_column_box=box_plot_y_col,
-                y_column_time='tws_mean',
-                scatter_cols=all_scatter_cols,
-                df=segment_periods,
-                tws_col='tws_mean',
-                color_map=period_color_map.get('boat'),
-                color_by='boat_color',
-                show_trendline=True,
-                upwind=(segment == 'upwind'),
-                trendline_by='boat_color'
-            ),
-            key=f"{segment}_combined_plots"
-        )
-    else:
-        st.warning("Some required columns are missing for the combined view.")
-
-
-def display_maneuver_analysis(maneuvers, maneuver_timeseries, filter_score, boats):
-    """Display maneuver analysis (tacks and gybes) - shows all plots with default metrics"""
-    st.header("Maneuver Analysis")
-    
-    if maneuvers.is_empty():
-        st.warning("No maneuver data available.")
-        return
-    
-    # Use tabs instead of radio button
-    tack_tab, gybe_tab = st.tabs(["Tacks", "Gybes"])
-    
-    with tack_tab:
-        _display_maneuver_type(maneuvers, maneuver_timeseries, filter_score, "Tack")
-    
-    with gybe_tab:
-        _display_maneuver_type(maneuvers, maneuver_timeseries, filter_score, "Gybe")
-
-
-def _display_maneuver_type(maneuvers, maneuver_timeseries, filter_score, maneuver_type):
-    """Helper function to display analysis for a specific maneuver type"""
-    
-    # Filter maneuvers (filtering happens here based on current slider value)
-    type_maneuvers = maneuvers.filter(pl.col('maneuver_type') == maneuver_type)
-    filtered_maneuvers = type_maneuvers.filter(pl.col('filter_score') >= filter_score)
-    
-    if filtered_maneuvers.is_empty():
-        st.warning(f"No {maneuver_type} maneuvers meet the filter criteria (score >= {filter_score}).")
-        return
-    
-    # Setup color mapping (done once for all plots)
-    maneuver_color_bys = {'boat'}
-    maneuver_color_map = construct_color_map(maneuver_color_bys, filtered_maneuvers)
-    
-    # Convert entry_tack
-    maneuver_entry_tack_map = {'Port': 'port', 'Stbd': 'starboard'}
-    filtered_maneuvers = filtered_maneuvers.with_columns(
-        pl.col("entry_tack").replace(maneuver_entry_tack_map).alias("entry_tack")
-    )
-    
-    maneuver_symbol_map = {'port': 's', 'starboard': 'o'}
-    filtered_maneuvers = html_utils.add_colors_symbols_to_df_multi(
-        filtered_maneuvers, 
-        color_map=maneuver_color_map, 
-        color_bys=maneuver_color_bys, 
-        symbol_map=maneuver_symbol_map, 
-        symbol_by='entry_tack'
-    )
-    
-    # Convert to pandas once for reuse
-    filtered_maneuvers_pd = filtered_maneuvers.to_pandas()
-    
-    # Create a shared ColumnDataSource for all plots to enable linked selection
-    shared_maneuver_source = ColumnDataSource(filtered_maneuvers_pd)
-    
-    # Default metrics from build_daily_report.py
-    scatter_metrics = ['entry_bsp', 'min_bsp', 'delta_bsp', 'max_yaw_rate', 'max_leeway', 
-                      'max_rudder_angle', 'overshoot_angle', 'maneuver_angle', 
-                      'old_foil_sink_min', 'new_foil_sink_min']
-    
-    # Filter to only available columns
-    scatter_metrics = [col for col in scatter_metrics if col in filtered_maneuvers.columns]
-    
-    # Prepare timeseries data if available
-    ts_source = None
-    available_y_cols = []
-    
-    if not maneuver_timeseries.is_empty():
-        # Filter timeseries to match filtered maneuvers
-        filtered_ids = filtered_maneuvers['id'].to_list()
-        filtered_ts = maneuver_timeseries.filter(pl.col('id').is_in(filtered_ids))
-        
-        if not filtered_ts.is_empty():
-            # Convert to pandas and prepare data for Bokeh
-            filtered_ts_pd = filtered_ts.to_pandas()
-            
-            # Group by maneuver id for multi_line plots
-            # The data needs to be in list-of-lists format for multi_line
-            grouped_data = {
-                'time_from_htw_ms': [],
-                'bsp': [],
-                'twa_n': [],
-                'vmg': [],
-                'acceleration': [],
-                'heel': [],
-                'trim': [],
-                'yaw_rate': [],
-                'rudder_angle': [],
-                'leeway': [],
-                'hull_altitude': [],
-                'foil_port_sink_mean': [],
-                'foil_stbd_sink_mean': [],
-                'bow_sink_mean': [],
-                'rudder_rake': [],
-                'leeward_flap_speed': [],
-                'id': [],
-                'maneuver_id': [],
-                'color': [],
-                'line_style': []
-            }
-            
-            for maneuver_id in filtered_ts_pd['id'].unique():
-                maneuver_data = filtered_ts_pd[filtered_ts_pd['id'] == maneuver_id]
-                
-                # Get color from the maneuver dataframe
-                maneuver_info = filtered_maneuvers_pd[filtered_maneuvers_pd['id'] == maneuver_id]
-                if not maneuver_info.empty:
-                    color = maneuver_info.iloc[0]['boat_color']
+        # Fetch and process
+        with st.spinner("Fetching and processing sailing data..."):
+            try:
+                fetcher = SGPDataProvider(boat=boat_choice)
+                raw_df = fetcher.get_data(start_str, end_str)
+                raw_df_rows = raw_df.height
+                if raw_df_rows > 0:
+                    fetcher.process_data(
+                        raw_df,
+                        race_num=None,
+                        period_duration=period_duration,
+                        min_speed_upwind=min_bsp_val,
+                        min_speed_downwind=min_bsp_val
+                    )
+                    periods_df = fetcher.periods
                 else:
-                    color = '#1f77b4'  # Default color
-                
-                # Append data for this maneuver
-                grouped_data['time_from_htw_ms'].append(maneuver_data['time_from_htw_ms'].tolist())
-                grouped_data['id'].append(maneuver_id)
-                grouped_data['maneuver_id'].append(str(maneuver_id))
-                grouped_data['color'].append(color)
-                grouped_data['line_style'].append('solid')
-                
-                # Append y-column data
-                for col in ['bsp', 'twa_n', 'vmg', 'acceleration', 'heel', 'trim', 'yaw_rate', 
-                           'rudder_angle', 'leeway', 'hull_altitude', 'foil_port_sink_mean', 
-                           'foil_stbd_sink_mean', 'bow_sink_mean', 'rudder_rake', 'leeward_flap_speed']:
-                    if col in maneuver_data.columns:
-                        grouped_data[col].append(maneuver_data[col].tolist())
-                    else:
-                        # If column doesn't exist, append empty list
-                        grouped_data[col].append([])
-            
-            # Create ColumnDataSource for timeseries
-            ts_source = ColumnDataSource(grouped_data)
-            
-            # Define y_columns to plot
-            y_cols = ['bsp', 'twa_n', 'vmg', 'acceleration', 'heel', 'trim', 'yaw_rate', 
-                     'rudder_angle', 'leeway', 'hull_altitude', 'foil_port_sink_mean', 
-                     'foil_stbd_sink_mean', 'bow_sink_mean', 'rudder_rake', 'leeward_flap_speed']
-            
-            # Filter to only available columns (non-empty)
-            available_y_cols = [col for col in y_cols if col in ts_source.data and any(len(lst) > 0 for lst in ts_source.data[col])]
-    
-    # Combined plots with shared selection including timeseries
-    st.subheader("Maneuver Analysis")
-    st.info("Lasso Select is active by default. Select data points to synchronize across all plots below, including timeseries.")
-    
-    if ('total_loss_m' in filtered_maneuvers.columns and 'mean_tws' in filtered_maneuvers.columns 
-        and scatter_metrics and ts_source is not None and available_y_cols):
-        # Create combined layout with linked timeseries
-        st_bokeh(
-            plots.combined_maneuver_plots_with_ts(
-                agg_source=shared_maneuver_source,
-                ts_source=ts_source,
-                y_column_box='total_loss_m',
-                y_column_time='mean_tws',
-                scatter_cols=scatter_metrics,
-                ts_y_cols=available_y_cols,
-                df=filtered_maneuvers,
-                tws_col='mean_tws',
-                color_map=maneuver_color_map.get('boat'),
-                color_by='boat_color',
-                show_trendline=True
-            ),
-            key=f"{maneuver_type}_combined_plots_with_ts"
-        )
-    elif 'total_loss_m' in filtered_maneuvers.columns and 'mean_tws' in filtered_maneuvers.columns and scatter_metrics:
-        # Fallback to combined plots without timeseries
-        st_bokeh(
-            plots.combined_maneuver_plots(
-                source=shared_maneuver_source,
-                y_column_box='total_loss_m',
-                y_column_time='mean_tws',
-                scatter_cols=scatter_metrics,
-                df=filtered_maneuvers,
-                tws_col='mean_tws',
-                color_map=maneuver_color_map.get('boat'),
-                color_by='boat_color',
-                show_trendline=True
-            ),
-            key=f"{maneuver_type}_combined_plots"
-        )
-        if not maneuver_timeseries.is_empty():
-            st.warning("Timeseries data is available but could not be linked. Check data format.")
-    else:
-        st.warning("Some required columns are missing for the combined view.")
+                    periods_df = pl.DataFrame()
+            except Exception as e:
+                st.error(f"Error querying live database: {e}")
+                periods_df = pl.DataFrame()
 
+        if is_live and periods_df.is_empty() and raw_df_rows == 0:
+            st.info("ℹ️ No active live data was returned from the database. Recommending 'Demo Mode' checkbox in the sidebar to replay simulation data.")
+            
+    # Apply direction & speed/VMG filters to periods
+    filtered_periods = pl.DataFrame()
+    if not periods_df.is_empty():
+        if upwind_mode:
+            if 'upwind' in periods_df.columns:
+                filtered_periods = periods_df.filter(
+                    pl.col("upwind") & 
+                    (pl.col("bsp_mean") >= min_bsp_val) & 
+                    (pl.col("tgt_vmg_percent_mean") >= min_vmg_pct)
+                )
+        else:
+            if 'downwind' in periods_df.columns:
+                filtered_periods = periods_df.filter(
+                    pl.col("downwind") & 
+                    (pl.col("bsp_mean") >= min_bsp_val) & 
+                    (pl.col("tgt_vmg_percent_mean") >= min_vmg_pct)
+                )
 
-def display_raw_data(periods, maneuvers):
-    """Display raw data tables"""
-    st.header("Raw Data Tables")
+    # ------------------
+    # Parameters Editor Table
+    # ------------------
+    st.subheader("Active Targets Configurator")
+    st.caption("Change targets and tolerances below to update status colors on the fly. Save changes to persist them.")
     
-    data_type = st.radio(
-        "Select Data Type",
-        ["Periods", "Maneuvers"],
-        horizontal=True
+    # Load current target dict
+    curr_targets = st.session_state.get('current_parameters', presets[active_preset_name])
+    mode_key = "upwind" if upwind_mode else "downwind"
+    mode_targets = curr_targets.get(mode_key, {})
+    
+    # Render table in st.data_editor
+    param_rows = []
+    for metric_name in TARGETS_METADATA.keys():
+        m_vals = mode_targets.get(metric_name, {"target": 0.0, "tolerance": 0.0})
+        param_rows.append({
+            "Metric": metric_name,
+            "Target Value": float(m_vals["target"]),
+            "Tolerance (+/-)": float(m_vals["tolerance"])
+        })
+    df_params = pd.DataFrame(param_rows)
+    
+    edited_df = st.data_editor(
+        df_params,
+        column_config={
+            "Metric": st.column_config.TextColumn("Metric", disabled=True),
+            "Target Value": st.column_config.NumberColumn("Target Value", format="%.2f"),
+            "Tolerance (+/-)": st.column_config.NumberColumn("Tolerance (+/-)", format="%.2f", min_value=0.0)
+        },
+        disabled=["Metric"],
+        use_container_width=True,
+        num_rows="fixed",
+        key="targets_editor"
     )
     
-    if data_type == "Periods":
-        if not periods.is_empty():
-            st.subheader("Periods Data")
-            st.dataframe(periods.to_pandas(), use_container_width=True, height=700)
-            
-            # Download button
-            csv = periods.to_pandas().to_csv(index=False)
-            st.download_button(
-                label="Download Periods CSV",
-                data=csv,
-                file_name="periods_data.csv",
-                mime="text/csv"
-            )
-        else:
-            st.warning("No periods data available.")
+    # Build target map from edited table
+    active_targets = {}
+    for idx, row in edited_df.iterrows():
+        active_targets[row["Metric"]] = {
+            "target": row["Target Value"],
+            "tolerance": row["Tolerance (+/-)"]
+        }
+        
+    # Save edits back to presets in memory
+    st.session_state['current_parameters'][mode_key] = active_targets
     
-    else:  # Maneuvers
-        if not maneuvers.is_empty():
-            st.subheader("Maneuvers Data")
-            st.dataframe(maneuvers.to_pandas(), use_container_width=True, height=700)
-            
-            # Download button
-            csv = maneuvers.to_pandas().to_csv(index=False)
-            st.download_button(
-                label="Download Maneuvers CSV",
-                data=csv,
-                file_name="maneuvers_data.csv",
-                mime="text/csv"
-            )
+    # Persistence Action buttons
+    col_save1, col_save2 = st.columns(2)
+    with col_save1:
+        if st.button("Save Changes to Selected Preset"):
+            presets[active_preset_name] = st.session_state['current_parameters']
+            if save_presets(presets):
+                st.success(f"Changes saved to preset '{active_preset_name}'!")
+    
+    # Calculate performance metrics
+    target_averages = {}
+    for target_name in TARGETS_METADATA.keys():
+        col_name = get_column_for_target(target_name, upwind_mode)
+        if not filtered_periods.is_empty() and col_name in filtered_periods.columns:
+            target_averages[target_name] = filtered_periods[col_name].mean()
         else:
-            st.warning("No maneuvers data available.")
+            target_averages[target_name] = None
 
+    # ------------------
+    # TARGET DASHBOARD GRID
+    # ------------------
+    st.markdown("<hr style='border-color: #334155;'>", unsafe_allow_html=True)
+    
+    # Category 1: Global
+    st.markdown("<div class='category-header'>Global Performance</div>", unsafe_allow_html=True)
+    cols_global = st.columns(3)
+    global_list = ["BSP", "TWA", "VMG"]
+    for idx, name in enumerate(global_list):
+        with cols_global[idx]:
+            avg_val = target_averages.get(name)
+            tgt_val = active_targets[name]["target"]
+            tol_val = active_targets[name]["tolerance"]
+            render_target_card(
+                name=name,
+                value=avg_val,
+                target=tgt_val,
+                tolerance=tol_val,
+                unit_str=TARGETS_METADATA[name]["unit"],
+                format_str=TARGETS_METADATA[name]["format"]
+            )
+            
+    # Category 2: Foils
+    st.markdown("<div class='category-header'>Foil Commands & Settings</div>", unsafe_allow_html=True)
+    cols_foils1 = st.columns(3)
+    foils_list1 = ["CANT", "CANT Drop Target", "Ride Height"]
+    for idx, name in enumerate(foils_list1):
+        with cols_foils1[idx]:
+            avg_val = target_averages.get(name)
+            tgt_val = active_targets[name]["target"]
+            tol_val = active_targets[name]["tolerance"]
+            render_target_card(
+                name=name,
+                value=avg_val,
+                target=tgt_val,
+                tolerance=tol_val,
+                unit_str=TARGETS_METADATA[name]["unit"],
+                format_str=TARGETS_METADATA[name]["format"]
+            )
+            
+    cols_foils2 = st.columns(2)
+    foils_list2 = ["Rudder Average", "Rudder Differential"]
+    for idx, name in enumerate(foils_list2):
+        with cols_foils2[idx]:
+            avg_val = target_averages.get(name)
+            tgt_val = active_targets[name]["target"]
+            tol_val = active_targets[name]["tolerance"]
+            render_target_card(
+                name=name,
+                value=avg_val,
+                target=tgt_val,
+                tolerance=tol_val,
+                unit_str=TARGETS_METADATA[name]["unit"],
+                format_str=TARGETS_METADATA[name]["format"]
+            )
+
+    # Category 3: Wing
+    st.markdown("<div class='category-header'>Wing Rigging & Trim</div>", unsafe_allow_html=True)
+    cols_wing = st.columns(4)
+    wing_list = ["Camber (CA1)", "Wing Twist", "Clew Position", "Wing Rotation"]
+    for idx, name in enumerate(wing_list):
+        with cols_wing[idx]:
+            avg_val = target_averages.get(name)
+            tgt_val = active_targets[name]["target"]
+            tol_val = active_targets[name]["tolerance"]
+            render_target_card(
+                name=name,
+                value=avg_val,
+                target=tgt_val,
+                tolerance=tol_val,
+                unit_str=TARGETS_METADATA[name]["unit"],
+                format_str=TARGETS_METADATA[name]["format"]
+            )
+            
+    # Category 4: Boat
+    st.markdown("<div class='category-header'>Boat Attitude</div>", unsafe_allow_html=True)
+    cols_boat = st.columns(2)
+    boat_list = ["Heel", "Pitch"]
+    for idx, name in enumerate(boat_list):
+        with cols_boat[idx]:
+            avg_val = target_averages.get(name)
+            tgt_val = active_targets[name]["target"]
+            tol_val = active_targets[name]["tolerance"]
+            render_target_card(
+                name=name,
+                value=avg_val,
+                target=tgt_val,
+                tolerance=tol_val,
+                unit_str=TARGETS_METADATA[name]["unit"],
+                format_str=TARGETS_METADATA[name]["format"]
+            )
+
+    # ------------------
+    # Detailed Data Section
+    # ------------------
+    st.markdown("<hr style='border-color: #334155;'>", unsafe_allow_html=True)
+    with st.expander("Show Details & Filtered Sailing Periods", expanded=False):
+        st.markdown(f"**Data Source:** {data_source_label} | **Rows Queried:** {raw_df_rows} | **Periods Detected:** {len(periods_df)} | **Matching Filters:** {len(filtered_periods)}")
+        if not filtered_periods.is_empty():
+            # Convert to Pandas for display
+            pd_disp = filtered_periods.to_pandas()
+            st.dataframe(pd_disp, use_container_width=True)
+        else:
+            st.warning("No sailing periods found matching current speed/VMG/direction filters in this time window.")
+
+    # Auto-refresh loop trigger
+    if is_live and auto_refresh:
+        time_lib.sleep(refresh_rate)
+        st.rerun()
 
 if __name__ == "__main__":
     if check_password():
