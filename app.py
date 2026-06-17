@@ -201,6 +201,7 @@ DEFAULT_TOLERANCES = {
 # type: "one_sided_high" | "symmetric" | "no_target"
 # col_up/col_dw: direction-specific columns (used instead of col)
 TARGETS_METADATA = {
+    "TWS":            {"col": "tws_mean",                  "unit": "kph", "fmt": "{:.1f}", "type": "no_target"},
     "TWA":            {"col": "twa_n_mean",                "unit": "°",   "fmt": "{:.1f}", "type": "twa_direction"},
     "BSP":            {"col": "bsp_mean",                  "unit": "kph", "fmt": "{:.1f}", "type": "one_sided_high"},
     "VMG":            {"col": "vmg_mean",                  "unit": "kph", "fmt": "{:.1f}", "type": "no_target"},
@@ -212,7 +213,7 @@ TARGETS_METADATA = {
     "Rudder Avg":     {"col": "rudder_avg_mean",            "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Camber":         {"col": "cam1_angle_n_mean",         "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Wing Twist":     {"col": "wing_twist_n_mean",         "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
-    "Clew Position":  {"col": "wing_clew_mean",            "unit": "mm",  "fmt": "{:.0f}", "type": "symmetric"},
+    "Clew Position":  {"col": "wing_clew_mean",            "unit": "mm",  "fmt": "{:.0f}", "type": "symmetric", "target_scale": 100},
     "Wing Rotation":  {"col": "wing_rotation_n_mean",      "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Jib Track":      {"col": "jib_sheet_angle_mean",      "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Jib Sheet Load": {"col": "jib_sheet_load_mean",       "unit": "kgf", "fmt": "{:.0f}", "type": "symmetric", "scale": 0.01},
@@ -220,7 +221,7 @@ TARGETS_METADATA = {
 }
 
 DASHBOARD_CATEGORIES = [
-    ("Global Performance",      ["TWA", "BSP", "VMG"],                           3),
+    ("Global Performance",      ["TWS", "TWA", "BSP", "VMG"],                    4),
     ("Foil Commands",           ["DRP", "CANT", "Ride Height", "Rudder Avg"],     4),
     ("Wing Rigging",            ["Camber", "Wing Twist", "Clew Position", "Wing Rotation"], 4),
     ("Jib",                     ["Jib Track", "Jib Sheet Load", "Jib Cunno Load"], 3),
@@ -606,7 +607,12 @@ def main():
             foils, wing, rudders, jib, upwind_mode, mean_tws or 20.0
         )
         matched_tws = sheet_targets.pop('_matched_tws', None)
-        active_targets = {m: sheet_targets.get(m) for m in TARGETS_METADATA}
+        active_targets = {}
+        for m, meta in TARGETS_METADATA.items():
+            val = sheet_targets.get(m)
+            if val is not None and "target_scale" in meta:
+                val = val * meta["target_scale"]
+            active_targets[m] = val
 
         # ── ACTUALS ─────────────────────────────────────────
         actuals = {}
