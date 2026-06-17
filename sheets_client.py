@@ -93,9 +93,9 @@ def get_cheatsheet_targets(foils, wing_size, rudders, jib, upwind, tws_mean):
         rudders:   'LARW' or 'HSRW'
         jib:       'Big' or 'Small'
         upwind:    True for upwind section, False for downwind
-        tws_mean:  session mean TWS in the same unit as the sheet TWS column.
-                   The sheet TWS column uses the same unit as tws_mean from the
-                   app (both sourced from the SailGP telemetry system).
+        tws_mean:  session mean TWS in km/h. The sheet TWS column is also in km/h
+                   (confirmed). No unit conversion is applied — values are compared
+                   directly.
 
     Returns:
         dict with keys for all metrics plus '_matched_tws' (the sheet row TWS
