@@ -214,8 +214,8 @@ TARGETS_METADATA = {
     "Wing Twist":     {"col": "wing_twist_n_mean",         "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Clew Position":  {"col": "wing_clew_mean",            "unit": "mm",  "fmt": "{:.0f}", "type": "symmetric"},
     "Wing Rotation":  {"col": "wing_rotation_n_mean",      "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
-    "Jib Track":      {"col": "jib_lead_percent_mean",     "unit": "%",   "fmt": "{:.1f}", "type": "symmetric"},
-    "Jib Sheet Load": {"col": "jib_sheet_load_mean",       "unit": "kgf", "fmt": "{:.0f}", "type": "symmetric"},
+    "Jib Track":      {"col": "jib_sheet_angle_mean",      "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
+    "Jib Sheet Load": {"col": "jib_sheet_load_mean",       "unit": "kgf", "fmt": "{:.0f}", "type": "symmetric", "scale": 0.01},
     "Jib Cunno Load": {"col": "jib_cunningham_load_mean",  "unit": "kgf", "fmt": "{:.0f}", "type": "symmetric"},
 }
 
@@ -610,11 +610,14 @@ def main():
 
         # ── ACTUALS ─────────────────────────────────────────
         actuals = {}
-        for name in TARGETS_METADATA:
+        for name, meta in TARGETS_METADATA.items():
             col = get_col(name, upwind_mode)
-            actuals[name] = (filtered[col].mean()
-                             if col and not filtered.is_empty() and col in filtered.columns
-                             else None)
+            val = (filtered[col].mean()
+                   if col and not filtered.is_empty() and col in filtered.columns
+                   else None)
+            if val is not None and "scale" in meta:
+                val = val * meta["scale"]
+            actuals[name] = val
 
         # ── SUB-HEADER (TWS row + stats) ─────────────────────
         n_periods = len(filtered) if not filtered.is_empty() else 0
