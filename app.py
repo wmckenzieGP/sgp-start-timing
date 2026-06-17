@@ -214,18 +214,18 @@ TARGETS_METADATA = {
     "TWA":            {"col": "twa_n_mean",                "unit": "°",   "fmt": "{:.1f}", "type": "twa_direction"},
     "BSP":            {"col": "bsp_mean",                  "unit": "kph", "fmt": "{:.1f}", "type": "one_sided_high"},
     "VMG":            {"col": "vmg_mean",                  "unit": "kph", "fmt": "{:.1f}", "type": "no_target"},
-    # DRP reads from the full raw df (not periods) so it captures tack/gybe drop events
-    "DRP":            {"raw_col_up": "target_db_cant_drop_upw",
-                       "raw_col_dw": "target_db_cant_drop_dw",
-                       "use_raw": True,
+    # DRP: average leeward cant while a board is in drop state (db_stow_state = 4)
+    # Computed from the full raw time-series so tack/gybe events are included
+    "DRP":            {"use_raw": True, "drp_from_drop_state": True,
                                                            "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "CANT":           {"col": "leeward_cant_mean",         "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Ride Height":    {"col": "foil_leeward_sink_mean",    "unit": "mm",  "fmt": "{:.0f}", "type": "symmetric"},
     "Rudder Avg":     {"col": "rudder_avg_mean",            "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
-    "Camber":         {"col": "cam1_angle_n_mean",         "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
-    "Wing Twist":     {"col": "wing_twist_n_mean",         "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
+    # Wing settings don't change with tack direction — use raw (non-normalised) columns
+    "Camber":         {"col": "cam1_angle_mean",           "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
+    "Wing Twist":     {"col": "wing_twist_mean",           "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Clew Position":  {"col": "wing_clew_mean",            "unit": "mm",  "fmt": "{:.0f}", "type": "symmetric", "target_scale": 100},
-    "Wing Rotation":  {"col": "wing_rotation_n_mean",      "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
+    "Wing Rotation":  {"col": "wing_rotation_mean",        "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Jib Track":      {"col": "jib_sheet_angle_mean",      "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Jib Sheet Load": {"col": "jib_sheet_load_mean",       "unit": "kgf", "fmt": "{:.0f}", "type": "symmetric", "scale": 0.01},
     "Jib Cunno Load": {"col": "jib_cunningham_load_mean",  "unit": "kgf", "fmt": "{:.0f}", "type": "symmetric"},
@@ -650,17 +650,26 @@ def main():
         # ── ACTUALS ─────────────────────────────────────────
         actuals = {}
         for name, meta in TARGETS_METADATA.items():
-            if meta.get("use_raw"):
-                # Read from the full raw time-series (not straight-line periods)
+            if meta.get("drp_from_drop_state"):
+                # DRP: average leeward cant while a board is deploying (state 4)
+                val = None
+                if (not raw_df.is_empty()
+                        and 'board_drop_port' in raw_df.columns
+                        and 'board_drop_stbd' in raw_df.columns
+                        and 'leeward_cant' in raw_df.columns):
+                    drop_rows = raw_df.filter(
+                        pl.col('board_drop_port') | pl.col('board_drop_stbd')
+                    )
+                    val = drop_rows['leeward_cant'].mean() if not drop_rows.is_empty() else None
+            elif meta.get("use_raw"):
                 col = get_col(name, upwind_mode, raw=True)
                 src = raw_df
+                val = src[col].mean() if col and not src.is_empty() and col in src.columns else None
             else:
                 col = get_col(name, upwind_mode)
                 src = filtered
+                val = src[col].mean() if col and not src.is_empty() and col in src.columns else None
 
-            val = (src[col].mean()
-                   if col and not src.is_empty() and col in src.columns
-                   else None)
             if val is not None and "scale" in meta:
                 val = val * meta["scale"]
             actuals[name] = val
