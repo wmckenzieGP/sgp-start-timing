@@ -6,30 +6,10 @@ import os
 import json
 import time as time_lib
 import hashlib
-import math
 from data_fetcher import SGPDataProvider
 import utils as u
 import sheets_client
 from sheets_client import WING_OPTIONS
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def _fetch_live_cached(boat, start_str, end_bucket_str, period_duration, min_bsp):
-    """
-    Fetch and process a live data window from InfluxDB.
-    end_bucket_str is rounded to 30-second intervals so successive fragment
-    reruns within the same window return from cache instantly (no grey flash).
-    Data refreshes from InfluxDB at most once every 30 seconds.
-    """
-    fetcher = SGPDataProvider(boat=boat)
-    raw = fetcher.get_data(start_str, end_bucket_str)
-    if raw.height == 0:
-        return pl.DataFrame(), pl.DataFrame()
-    fetcher.process_data(raw, period_duration=period_duration,
-                         min_speed_upwind=min_bsp, min_speed_downwind=min_bsp)
-    periods = fetcher.periods if fetcher.periods is not None else pl.DataFrame()
-    raw_df  = fetcher.df    if fetcher.df    is not None else pl.DataFrame()
-    return periods, raw_df
 
 st.set_page_config(
     page_title="F50 Performance Dashboard",
@@ -207,11 +187,6 @@ div[data-testid="stNumberInput"] label { font-size: 0.78rem !important; color: #
     font-size: 0.82rem;
 }
 hr { border-color: #1e2d45 !important; margin: 0.5rem 0 !important; }
-
-/* Prevent fragment rerun from greying out the dashboard content.
-   Streamlit dims stale elements with inline opacity during a rerun;
-   !important overrides inline styles so cards stay fully visible. */
-[data-testid="stMainBlockContainer"] * { opacity: 1 !important; transition: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -566,24 +541,22 @@ def main():
         raw_df = pl.DataFrame()  # full processed df — used for DRP and other raw metrics
 
         if is_live:
-            # Round end time to 30-second bucket so the cache hits on every
-            # fragment tick within the same window — only fetches InfluxDB once
-            # per 30 s, making most reruns instant and the grey flash invisible.
-            now = datetime.utcnow()
-            bucket_s = 30
-            bucket_epoch = math.floor(now.timestamp() / bucket_s) * bucket_s
-            end_bucket = datetime.utcfromtimestamp(bucket_epoch)
-            start_dt   = end_bucket - timedelta(minutes=rolling_window)
-            end_bucket_str = end_bucket.strftime("%Y-%m-%dT%H:%M:%SZ")
-            start_str      = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            end_dt = datetime.utcnow()
+            start_dt = end_dt - timedelta(minutes=rolling_window)
             data_label = f"Live — last {rolling_window} min"
             try:
-                periods_df, raw_df = _fetch_live_cached(
-                    boat, start_str, end_bucket_str, period_duration, min_bsp
+                fetcher = SGPDataProvider(boat=boat)
+                raw = fetcher.get_data(
+                    start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
                 )
+                if raw.height > 0:
+                    fetcher.process_data(raw, period_duration=period_duration,
+                                         min_speed_upwind=min_bsp, min_speed_downwind=min_bsp)
+                    periods_df = fetcher.periods if fetcher.periods is not None else pl.DataFrame()
+                    raw_df = fetcher.df if fetcher.df is not None else pl.DataFrame()
             except Exception as e:
                 st.error(f"Live data error: {e}")
-                periods_df, raw_df = pl.DataFrame(), pl.DataFrame()
 
         else:
             # Replay mode
