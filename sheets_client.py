@@ -1,6 +1,7 @@
 import streamlit as st
-import gspread
-from google.oauth2.service_account import Credentials
+
+# gspread and google-auth are imported lazily inside functions so a missing
+# package only breaks sheet fetching, not the entire app startup.
 
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets.readonly',
@@ -30,6 +31,8 @@ _SECTIONS = {
 @st.cache_resource
 def _get_gc():
     """Authenticated gspread client. Uses Streamlit secrets in production, JSON file locally."""
+    import gspread
+    from google.oauth2.service_account import Credentials
     try:
         creds = Credentials.from_service_account_info(
             dict(st.secrets["gcp_service_account"]), scopes=SCOPES
