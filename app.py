@@ -524,7 +524,7 @@ def main():
 
     # Determine fragment auto-refresh interval
     if is_live and auto_refresh:
-        _run_every = 5  # fast ticks — data comes from session-state slice, not InfluxDB
+        _run_every = refresh_rate
     elif data_mode == "Replay" and st.session_state.get('replay_playing', False):
         _run_every = 5
     else:
@@ -541,58 +541,22 @@ def main():
         raw_df = pl.DataFrame()  # full processed df — used for DRP and other raw metrics
 
         if is_live:
-            now = datetime.utcnow()
-            live_fetch_hash = (boat, period_duration, min_bsp)
-            live_fetch_end = st.session_state.get('live_fetch_end')
-
-            # Re-fetch when: no cached data, config changed, or cache is >2 min old
-            needs_fetch = (
-                'live_periods' not in st.session_state
-                or st.session_state.get('live_fetch_hash') != live_fetch_hash
-                or live_fetch_end is None
-                or (now - live_fetch_end).total_seconds() > 120
-            )
-
-            if needs_fetch:
-                with st.spinner("Updating live data…"):
-                    try:
-                        fetch_start = now - timedelta(hours=1)
-                        fetcher = SGPDataProvider(boat=boat)
-                        raw = fetcher.get_data(
-                            fetch_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            now.strftime("%Y-%m-%dT%H:%M:%SZ")
-                        )
-                        if raw.height > 0:
-                            fetcher.process_data(raw, period_duration=period_duration,
-                                                 min_speed_upwind=min_bsp, min_speed_downwind=min_bsp)
-                            st.session_state['live_periods'] = fetcher.periods if fetcher.periods is not None else pl.DataFrame()
-                            st.session_state['live_processed_df'] = fetcher.df if fetcher.df is not None else pl.DataFrame()
-                        else:
-                            st.session_state['live_periods'] = pl.DataFrame()
-                            st.session_state['live_processed_df'] = pl.DataFrame()
-                        st.session_state['live_fetch_end'] = now
-                        st.session_state['live_fetch_hash'] = live_fetch_hash
-                    except Exception as e:
-                        st.error(f"Live data error: {e}")
-
-            # Slice to current rolling window — same pattern as replay, instant
-            virtual_now = datetime.utcnow()
-            virtual_start = virtual_now - timedelta(minutes=rolling_window)
+            end_dt = datetime.utcnow()
+            start_dt = end_dt - timedelta(minutes=rolling_window)
             data_label = f"Live — last {rolling_window} min"
-
-            all_periods = st.session_state.get('live_periods', pl.DataFrame())
-            if not all_periods.is_empty() and 'timestamp' in all_periods.columns:
-                periods_df = all_periods.filter(
-                    (pl.col("timestamp") >= virtual_start) &
-                    (pl.col("timestamp") <= virtual_now)
+            try:
+                fetcher = SGPDataProvider(boat=boat)
+                raw = fetcher.get_data(
+                    start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
                 )
-
-            all_raw = st.session_state.get('live_processed_df', pl.DataFrame())
-            if not all_raw.is_empty() and 'timestamp' in all_raw.columns:
-                raw_df = all_raw.filter(
-                    (pl.col("timestamp") >= virtual_start) &
-                    (pl.col("timestamp") <= virtual_now)
-                )
+                if raw.height > 0:
+                    fetcher.process_data(raw, period_duration=period_duration,
+                                         min_speed_upwind=min_bsp, min_speed_downwind=min_bsp)
+                    periods_df = fetcher.periods if fetcher.periods is not None else pl.DataFrame()
+                    raw_df = fetcher.df if fetcher.df is not None else pl.DataFrame()
+            except Exception as e:
+                st.error(f"Live data error: {e}")
 
         else:
             # Replay mode
