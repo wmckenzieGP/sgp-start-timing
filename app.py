@@ -102,22 +102,28 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .metric-card:hover { border-color: #334155; }
 .metric-left { flex: 1; min-width: 0; }
 .metric-name {
-    font-size: 0.7rem;
+    font-size: 0.85rem;
     font-weight: 700;
-    color: #64748b;
+    color: #f1f5f9;
     text-transform: uppercase;
-    letter-spacing: 0.8px;
-    margin-bottom: 4px;
+    letter-spacing: 0.5px;
+    margin-bottom: 5px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 .metric-tgt {
-    font-size: 0.72rem;
-    color: #475569;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #cbd5e1;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+.metric-tol {
+    font-size: 0.68rem;
+    color: #475569;
+    margin-top: 2px;
 }
 .metric-tgt b { color: #64748b; }
 
@@ -224,8 +230,8 @@ TARGETS_METADATA = {
 
 DASHBOARD_CATEGORIES = [
     ("Global Performance",      ["TWS", "TWA", "BSP", "VMG"],                    4),
-    ("Foil Commands",           ["DRP", "CANT", "Ride Height", "Rudder Avg"],     4),
-    ("Wing Rigging",            ["Camber", "Wing Twist", "Clew Position", "Wing Rotation"], 4),
+    ("Foil",                    ["DRP", "CANT", "Ride Height", "Rudder Avg"],     4),
+    ("Wing",                    ["Camber", "Wing Twist", "Clew Position", "Wing Rotation"], 4),
     ("Jib",                     ["Jib Track", "Jib Sheet Load", "Jib Cunno Load"], 3),
 ]
 
@@ -303,17 +309,21 @@ def render_card(name, value, target, tolerance, upwind_mode=True):
     val_str = (fmt.format(value) + " " + unit) if (value is not None and not (isinstance(value, float) and pd.isna(value))) else "N/A"
 
     if target is not None and mtype != "no_target":
-        tgt_str = f"<b>TGT</b> {fmt.format(target)} {unit} &nbsp;±{fmt.format(tolerance)}"
+        tgt_str = f"{fmt.format(target)} {unit}"
+        tol_str = f"<div class='metric-tol'>± {fmt.format(tolerance)}</div>"
     elif mtype == "no_target":
-        tgt_str = "<b>TRACKING</b> no target"
+        tgt_str = "LIVE"
+        tol_str = ""
     else:
-        tgt_str = "<b>TGT</b> — no sheet value"
+        tgt_str = "NO TGT"
+        tol_str = ""
 
     st.markdown(f"""
     <div class="metric-card">
       <div class="metric-left">
         <div class="metric-name">{name}</div>
         <div class="metric-tgt">{tgt_str}</div>
+        {tol_str}
       </div>
       <div class="val-box val-{css}">
         <div class="val-num">{val_str}</div>
