@@ -129,44 +129,46 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
 /* ── Value boxes ── */
 .val-box {
-    min-width: 130px;
+    width: 105px;
+    min-width: 105px;
+    max-width: 105px;
     text-align: center;
     border-radius: 8px;
-    padding: 10px 14px;
+    padding: 8px 10px;
     flex-shrink: 0;
 }
-.val-num { font-size: 1.8rem; font-weight: 700; line-height: 1.2; }
-.val-unit { font-size: 1.3rem; font-weight: 500; margin-left: 3px; }
+.val-num { font-size: 1.5rem; font-weight: 700; line-height: 1.15; }
+.val-unit { font-size: 1.0rem; font-weight: 500; margin-left: 2px; }
 .val-badge {
     font-size: 0.6rem;
     font-weight: 700;
     letter-spacing: 0.8px;
-    margin-top: 2px;
+    margin-top: 3px;
 }
 
 /* Green */
 .val-green { background: linear-gradient(135deg,#052e16,#14532d); border: 1px solid #166534; }
-.val-green .val-num { color: #4ade80; }
+.val-green .val-num, .val-green .val-unit { color: #4ade80; }
 .val-green .val-badge { color: #86efac; }
 
 /* Orange */
 .val-orange { background: linear-gradient(135deg,#1c1007,#431407); border: 1px solid #9a3412; }
-.val-orange .val-num { color: #fb923c; }
+.val-orange .val-num, .val-orange .val-unit { color: #fb923c; }
 .val-orange .val-badge { color: #fdba74; }
 
 /* Red */
 .val-red { background: linear-gradient(135deg,#1c0607,#450a0a); border: 1px solid #991b1b; }
-.val-red .val-num { color: #f87171; }
+.val-red .val-num, .val-red .val-unit { color: #f87171; }
 .val-red .val-badge { color: #fca5a5; }
 
 /* Grey (no data) */
 .val-grey { background: #1e293b; border: 1px solid #334155; }
-.val-grey .val-num { color: #475569; }
+.val-grey .val-num, .val-grey .val-unit { color: #475569; }
 .val-grey .val-badge { color: #334155; }
 
 /* Blue (no target) */
 .val-blue { background: linear-gradient(135deg,#0c1a2e,#0c2444); border: 1px solid #1e40af; }
-.val-blue .val-num { color: #60a5fa; }
+.val-blue .val-num, .val-blue .val-unit { color: #60a5fa; }
 .val-blue .val-badge { color: #93c5fd; }
 
 /* ── Replay controls ── */
