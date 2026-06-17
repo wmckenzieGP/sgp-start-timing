@@ -522,18 +522,10 @@ def main():
         unsafe_allow_html=True
     )
 
-    # Determine fragment auto-refresh interval
-    if is_live and auto_refresh:
-        _run_every = refresh_rate
-    elif data_mode == "Replay" and st.session_state.get('replay_playing', False):
-        _run_every = 5
-    else:
-        _run_every = None
-
     # ── LIVE DASHBOARD FRAGMENT ───────────────────────────
-    # @st.fragment re-runs only this section on each refresh tick —
-    # the sidebar, header, and page chrome stay completely stable.
-    @st.fragment(run_every=_run_every)
+    # Each condition produces a *different* decorated function so Streamlit
+    # sees a new fragment (and resets the timer) when auto_refresh or
+    # refresh_rate changes — fixing both the slider and the on/off toggle.
     def _dashboard():
         periods_df = pl.DataFrame()
         data_label = ""
@@ -696,7 +688,16 @@ def main():
             else:
                 st.caption("No period data available.")
 
-    _dashboard()
+    # Apply the correct fragment decorator based on current auto-refresh state.
+    # Using a fresh st.fragment() call each time means the run_every timer
+    # is always in sync with the slider and the auto-refresh checkbox.
+    replay_playing = data_mode == "Replay" and st.session_state.get('replay_playing', False)
+    if is_live and auto_refresh:
+        st.fragment(run_every=refresh_rate)(_dashboard)()
+    elif replay_playing:
+        st.fragment(run_every=5)(_dashboard)()
+    else:
+        st.fragment(_dashboard)()
 
 
 if __name__ == "__main__" or True:
