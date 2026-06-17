@@ -129,13 +129,13 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
 /* ── Value boxes ── */
 .val-box {
-    min-width: 88px;
+    min-width: 130px;
     text-align: center;
     border-radius: 8px;
-    padding: 8px 10px;
+    padding: 10px 14px;
     flex-shrink: 0;
 }
-.val-num { font-size: 1.1rem; font-weight: 700; line-height: 1.2; }
+.val-num { font-size: 2.2rem; font-weight: 700; line-height: 1.2; }
 .val-badge {
     font-size: 0.6rem;
     font-weight: 700;
