@@ -90,30 +90,30 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     background: #111827;
     border: 1px solid #1e2d45;
     border-radius: 10px;
-    padding: 12px 14px;
+    padding: 14px 16px;
     margin-bottom: 10px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 10px;
-    min-height: 80px;
+    gap: 12px;
+    min-height: 100px;
     transition: border-color 0.15s;
 }
 .metric-card:hover { border-color: #334155; }
 .metric-left { flex: 1; min-width: 0; }
 .metric-name {
-    font-size: 0.85rem;
+    font-size: 1.6rem;
     font-weight: 700;
     color: #f1f5f9;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 5px;
+    letter-spacing: 0.3px;
+    margin-bottom: 4px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 .metric-tgt {
-    font-size: 0.82rem;
+    font-size: 1.55rem;
     font-weight: 600;
     color: #cbd5e1;
     white-space: nowrap;
@@ -121,9 +121,9 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     text-overflow: ellipsis;
 }
 .metric-tol {
-    font-size: 0.68rem;
+    font-size: 0.75rem;
     color: #475569;
-    margin-top: 2px;
+    margin-top: 3px;
 }
 .metric-tgt b { color: #64748b; }
 
