@@ -135,7 +135,8 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     padding: 10px 14px;
     flex-shrink: 0;
 }
-.val-num { font-size: 2.2rem; font-weight: 700; line-height: 1.2; }
+.val-num { font-size: 1.8rem; font-weight: 700; line-height: 1.2; }
+.val-unit { font-size: 1.3rem; font-weight: 500; margin-left: 3px; }
 .val-badge {
     font-size: 0.6rem;
     font-weight: 700;
@@ -306,7 +307,10 @@ def render_card(name, value, target, tolerance, upwind_mode=True):
 
     css, badge = get_status_color(value, target, tolerance, mtype)
 
-    val_str = (fmt.format(value) + " " + unit) if (value is not None and not (isinstance(value, float) and pd.isna(value))) else "N/A"
+    if value is not None and not (isinstance(value, float) and pd.isna(value)):
+        val_str = f'<span class="val-num">{fmt.format(value)}</span><span class="val-unit">{unit}</span>'
+    else:
+        val_str = '<span class="val-num">N/A</span>'
 
     if target is not None and mtype != "no_target":
         tgt_str = f"{fmt.format(target)} {unit}"
@@ -326,7 +330,7 @@ def render_card(name, value, target, tolerance, upwind_mode=True):
         {tol_str}
       </div>
       <div class="val-box val-{css}">
-        <div class="val-num">{val_str}</div>
+        <div>{val_str}</div>
         <div class="val-badge">{badge}</div>
       </div>
     </div>""", unsafe_allow_html=True)
