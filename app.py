@@ -205,8 +205,10 @@ TARGETS_METADATA = {
     "TWA":            {"col": "twa_n_mean",                "unit": "°",   "fmt": "{:.1f}", "type": "twa_direction"},
     "BSP":            {"col": "bsp_mean",                  "unit": "kph", "fmt": "{:.1f}", "type": "one_sided_high"},
     "VMG":            {"col": "vmg_mean",                  "unit": "kph", "fmt": "{:.1f}", "type": "no_target"},
-    "DRP":            {"col_up": "target_db_cant_drop_upw_mean",
-                       "col_dw": "target_db_cant_drop_dw_mean",
+    # DRP reads from the full raw df (not periods) so it captures tack/gybe drop events
+    "DRP":            {"raw_col_up": "target_db_cant_drop_upw",
+                       "raw_col_dw": "target_db_cant_drop_dw",
+                       "use_raw": True,
                                                            "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "CANT":           {"col": "leeward_cant_mean",         "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Ride Height":    {"col": "foil_leeward_sink_mean",    "unit": "mm",  "fmt": "{:.0f}", "type": "symmetric"},
@@ -231,8 +233,10 @@ DASHBOARD_CATEGORIES = [
 # Helpers
 # ──────────────────────────────────────────────────────────
 
-def get_col(name, upwind):
+def get_col(name, upwind, raw=False):
     m = TARGETS_METADATA[name]
+    if raw and "raw_col_up" in m:
+        return m["raw_col_up"] if upwind else m["raw_col_dw"]
     if "col_up" in m:
         return m["col_up"] if upwind else m["col_dw"]
     return m.get("col")
@@ -518,6 +522,8 @@ def main():
         periods_df = pl.DataFrame()
         data_label = ""
 
+        raw_df = pl.DataFrame()  # full processed df — used for DRP and other raw metrics
+
         if is_live:
             end_dt = datetime.utcnow()
             start_dt = end_dt - timedelta(minutes=rolling_window)
@@ -532,6 +538,7 @@ def main():
                     fetcher.process_data(raw, period_duration=period_duration,
                                          min_speed_upwind=min_bsp, min_speed_downwind=min_bsp)
                     periods_df = fetcher.periods if fetcher.periods is not None else pl.DataFrame()
+                    raw_df = fetcher.df if fetcher.df is not None else pl.DataFrame()
             except Exception as e:
                 st.error(f"Live data error: {e}")
 
@@ -570,17 +577,27 @@ def main():
                             fetcher.process_data(raw, period_duration=period_duration,
                                                   min_speed_upwind=min_bsp, min_speed_downwind=min_bsp)
                             st.session_state['replay_periods'] = fetcher.periods if fetcher.periods is not None else pl.DataFrame()
+                            st.session_state['replay_processed_df'] = fetcher.df if fetcher.df is not None else pl.DataFrame()
                         else:
                             st.session_state['replay_periods'] = pl.DataFrame()
+                            st.session_state['replay_processed_df'] = pl.DataFrame()
                         st.session_state['replay_fetch_hash'] = fetch_hash
                     except Exception as e:
                         st.error(f"Replay data error: {e}")
                         st.session_state['replay_periods'] = pl.DataFrame()
 
-            # Slice to the current virtual window
+            # Slice periods to the current virtual window
             all_periods = st.session_state.get('replay_periods', pl.DataFrame())
             if not all_periods.is_empty() and 'timestamp' in all_periods.columns:
                 periods_df = all_periods.filter(
+                    (pl.col("timestamp") >= virtual_start) &
+                    (pl.col("timestamp") <= virtual_now)
+                )
+
+            # Slice full processed df to the current virtual window (used for DRP)
+            all_raw = st.session_state.get('replay_processed_df', pl.DataFrame())
+            if not all_raw.is_empty() and 'timestamp' in all_raw.columns:
+                raw_df = all_raw.filter(
                     (pl.col("timestamp") >= virtual_start) &
                     (pl.col("timestamp") <= virtual_now)
                 )
@@ -617,9 +634,16 @@ def main():
         # ── ACTUALS ─────────────────────────────────────────
         actuals = {}
         for name, meta in TARGETS_METADATA.items():
-            col = get_col(name, upwind_mode)
-            val = (filtered[col].mean()
-                   if col and not filtered.is_empty() and col in filtered.columns
+            if meta.get("use_raw"):
+                # Read from the full raw time-series (not straight-line periods)
+                col = get_col(name, upwind_mode, raw=True)
+                src = raw_df
+            else:
+                col = get_col(name, upwind_mode)
+                src = filtered
+
+            val = (src[col].mean()
+                   if col and not src.is_empty() and col in src.columns
                    else None)
             if val is not None and "scale" in meta:
                 val = val * meta["scale"]
