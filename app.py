@@ -222,7 +222,7 @@ TARGETS_METADATA = {
     "CANT":           {"col": "leeward_cant_mean",         "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Ride Height":    {"col": "foil_leeward_sink_mean",    "unit": "mm",  "fmt": "{:.0f}", "type": "symmetric"},
     "Rudder Avg":     {"col": "rudder_avg_mean",            "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
-    "Camber":         {"col": "cam1_angle_n_mean",         "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
+    "Camber":         {"col": "cam1_angle_abs_mean",        "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Wing Twist":     {"col": "wing_twist_n_mean",         "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Clew Position":  {"col": "wing_clew_mean",            "unit": "mm",  "fmt": "{:.0f}", "type": "symmetric", "target_scale": 100},
     "Wing Rotation":  {"col": "wing_rotation_n_mean",      "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
