@@ -201,7 +201,7 @@ DEFAULT_TOLERANCES = {
 # type: "one_sided_high" | "symmetric" | "no_target"
 # col_up/col_dw: direction-specific columns (used instead of col)
 TARGETS_METADATA = {
-    "TWA":            {"col": "twa_n_mean",                "unit": "°",   "fmt": "{:.1f}", "type": "one_sided_high"},
+    "TWA":            {"col": "twa_n_mean",                "unit": "°",   "fmt": "{:.1f}", "type": "twa_direction"},
     "BSP":            {"col": "bsp_mean",                  "unit": "kph", "fmt": "{:.1f}", "type": "one_sided_high"},
     "VMG":            {"col": "vmg_mean",                  "unit": "kph", "fmt": "{:.1f}", "type": "no_target"},
     "DRP":            {"col_up": "target_db_cant_drop_upw_mean",
@@ -209,7 +209,7 @@ TARGETS_METADATA = {
                                                            "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "CANT":           {"col": "leeward_cant_mean",         "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Ride Height":    {"col": "foil_leeward_sink_mean",    "unit": "mm",  "fmt": "{:.0f}", "type": "symmetric"},
-    "Rudder Avg":     {"col": "rudder_angle_n_mean",       "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
+    "Rudder Avg":     {"col": "rudder_avg_mean",            "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Camber":         {"col": "cam1_angle_n_mean",         "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Wing Twist":     {"col": "wing_twist_n_mean",         "unit": "°",   "fmt": "{:.1f}", "type": "symmetric"},
     "Clew Position":  {"col": "wing_clew_mean",            "unit": "mm",  "fmt": "{:.0f}", "type": "symmetric"},
@@ -242,9 +242,11 @@ def get_status_color(value, target, tolerance, metric_type="symmetric"):
     Returns (css_class, badge_text).
 
     metric_type:
-      "one_sided_high"  — above target = green (BSP, TWA)
+      "one_sided_high"  — actual >= target = green (BSP)
+      "one_sided_low"   — actual <= target = green (TWA upwind: less angle is better)
       "symmetric"       — ±tolerance bands
       "no_target"       — blue, always shows actual value
+    Note: "twa_direction" is resolved to one_sided_low/high before reaching here.
     """
     if metric_type == "no_target":
         if value is None or (isinstance(value, float) and pd.isna(value)):
@@ -252,7 +254,6 @@ def get_status_color(value, target, tolerance, metric_type="symmetric"):
         return "blue", "LIVE"
 
     if target is None:
-        # Empty cell in sheet — show value as blue "NO TGT"
         if value is None or (isinstance(value, float) and pd.isna(value)):
             return "grey", "N/A"
         return "blue", "NO TGT"
@@ -260,31 +261,37 @@ def get_status_color(value, target, tolerance, metric_type="symmetric"):
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return "grey", "N/A"
 
+    tol = max(tolerance, 0.001)
+
     if metric_type == "one_sided_high":
-        # Faster/higher TWA is always good — one-sided
         if value >= target:
             return "green", "ON TGT"
         diff = target - value
-        tol = max(tolerance, 0.001)
-        if diff <= tol:
-            return "orange", "EDGE"
-        return "red", "OUT"
+        return ("orange", "EDGE") if diff <= tol else ("red", "OUT")
+
+    if metric_type == "one_sided_low":
+        if value <= target:
+            return "green", "ON TGT"
+        diff = value - target
+        return ("orange", "EDGE") if diff <= tol else ("red", "OUT")
 
     # Symmetric ±tolerance
     diff = abs(value - target)
-    tol = max(tolerance, 0.001)
     if diff <= tol:
         return "green", "ON TGT"
-    if diff <= 1.5 * tol:
-        return "orange", "EDGE"
-    return "red", "OUT"
+    return ("orange", "EDGE") if diff <= 1.5 * tol else ("red", "OUT")
 
 
-def render_card(name, value, target, tolerance):
+def render_card(name, value, target, tolerance, upwind_mode=True):
     m = TARGETS_METADATA[name]
     unit = m["unit"]
     fmt = m["fmt"]
     mtype = m["type"]
+
+    # TWA: upwind = less angle is better (one_sided_low)
+    #       downwind = more angle is better (one_sided_high)
+    if mtype == "twa_direction":
+        mtype = "one_sided_low" if upwind_mode else "one_sided_high"
 
     css, badge = get_status_color(value, target, tolerance, mtype)
 
@@ -629,7 +636,8 @@ def main():
                         name=name,
                         value=actuals.get(name),
                         target=active_targets.get(name),
-                        tolerance=tolerances.get(name, DEFAULT_TOLERANCES.get(name, 1.0))
+                        tolerance=tolerances.get(name, DEFAULT_TOLERANCES.get(name, 1.0)),
+                        upwind_mode=upwind_mode
                     )
 
         # ── RAW DATA EXPANDER ────────────────────────────────

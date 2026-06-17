@@ -32,6 +32,7 @@ RENAMING_DICT = {
     'LENGTH_RH_S_mm': 'foil_stbd_sink',
     'LENGTH_RH_BOW_mm': 'bow_sink',
     'ANGLE_RUDDER_deg': 'rudder_angle',
+    'ANGLE_RUD_AVG_deg': 'rudder_avg',
     'ANGLE_DB_RAKE_P_deg': 'port_rake',
     'ANGLE_DB_RAKE_S_deg': 'stbd_rake',
     'ANGLE_DB_RAKE_P_AOA_deg': 'port_rake_aoa',
