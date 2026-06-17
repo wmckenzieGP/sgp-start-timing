@@ -1,4 +1,3 @@
-import numpy as np
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
@@ -8,10 +7,24 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive.readonly',
 ]
 
-# BSP in the sheet is kph; app bsp_mean is in kts
-KTS_TO_KPH = 1.852
-# TWS in the sheet drop table is kts; app tws_mean is in kph
-KPH_TO_KTS = 1 / 1.852
+# Valid wing sizes per foil type
+WING_OPTIONS = {
+    'HSB2': ['18m', '24m'],
+    'LAB2': ['24m', '27m'],
+}
+
+# Section lookup: (foils, wing_size, upwind) -> (first_data_row, exclusive_end_row)
+# Row indices are 0-based into the raw sheet data. Reach sections are excluded.
+_SECTIONS = {
+    ('HSB2', '24m', True):  (4,  16),   # rows 4-15:  TWS 17.5-45
+    ('HSB2', '24m', False): (18, 32),   # rows 18-31: TWS 17.5-50
+    ('HSB2', '18m', True):  (51, 62),   # rows 51-61: TWS 25-50
+    ('HSB2', '18m', False): (63, 74),   # rows 63-73: TWS 25-50
+    ('LAB2', '27m', True):  (4,  15),   # rows 4-14:  TWS 5-30
+    ('LAB2', '27m', False): (21, 32),   # rows 21-31: TWS 5-30
+    ('LAB2', '24m', True):  (36, 45),   # rows 36-44: TWS 10-30
+    ('LAB2', '24m', False): (47, 55),   # rows 47-54: TWS 10-27.5
+}
 
 
 @st.cache_resource
@@ -28,106 +41,110 @@ def _get_gc():
     return gspread.authorize(creds)
 
 
-def _parse_table(rows, start_col=0):
-    """Extract (xs, ys) numeric arrays from a two-column section of sheet rows."""
-    xs, ys = [], []
-    for row in rows:
-        try:
-            x = float(str(row[start_col]).strip())
-            y = float(str(row[start_col + 1]).strip())
-            xs.append(x)
-            ys.append(y)
-        except (ValueError, IndexError):
-            continue
-    return np.array(xs), np.array(ys)
-
-
-def _interp(x_val, xs, ys):
-    """Clamped linear interpolation. Returns None if table is empty or input is None."""
-    if x_val is None or len(xs) == 0:
-        return None
-    return float(np.interp(x_val, xs, ys))
-
-
 @st.cache_data(ttl=300)
-def load_speed_targets():
+def _load_cheatsheet_rows():
     """
-    Load and parse lookup tables from SPEED v2.
-    Returns a nested dict of (xs, ys) arrays per metric/direction, or None on failure.
-    Results cached for 5 minutes.
+    Load raw row data from both cheatsheet tabs.
+    Returns {'HSB2': [[...], ...], 'LAB2': [[...], ...]} or None on failure.
+    Cached for 5 minutes — sheet content rarely changes mid-session.
 
-    Sheet structure (0-indexed rows):
-      Cant & Drop Targets:
-        rows 3-16   → upwind cant vs BSP (kph)
-        rows 20-29  → downwind cant vs BSP (kph)
-        rows 33-43  → drop targets vs TWS (kts); cols 0-1 UW, cols 4-5 DW
-      Rudder & LARW Targets:
-        rows 3-13   → upwind LARW2 vs BSP (kph); cols 0-1
-        rows 3-18   → downwind LARW2 vs BSP (kph); cols 4-5
+    Column layout (0-indexed):
+      0: CONFIG/MODE  1: TWS  2: TWA  3: SGP BSP  4: BSP  5: DRP  6: CANT
+      7: RH TARGET  8: LARW RUD AVG  9: HSRW RUD AVG  10: CAMBER  11: WING TWIST
+      12: CLEW POSITION  13: WING ROTATION
+      14-16: BIG JIB (TRACK, SHEET LOAD, CUNNO LOAD)
+      17-19: SMALL JIB (TRACK, SHEET LOAD, CUNNO LOAD)
     """
     try:
         gc = _get_gc()
         sh = gc.open('SPEED v2')
-
-        cant_rows = sh.worksheet('Cant & Drop Targets').get_all_values()
-        rudder_rows = sh.worksheet('Rudder & LARW Targets').get_all_values()
-
-        return {
-            'cant': {
-                'upwind':   _parse_table(cant_rows[3:17],  start_col=0),
-                'downwind': _parse_table(cant_rows[20:30], start_col=0),
-            },
-            'drop': {
-                'upwind':   _parse_table(cant_rows[33:44], start_col=0),
-                'downwind': _parse_table(cant_rows[33:44], start_col=4),
-            },
-            'rudder': {
-                'upwind':   _parse_table(rudder_rows[3:14], start_col=0),
-                'downwind': _parse_table(rudder_rows[3:19], start_col=4),
-            },
-        }
+        result = {}
+        for ws in sh.worksheets():
+            name = ws.title
+            if 'HSB2' in name and 'heatsheet' in name.lower():
+                result['HSB2'] = ws.get_all_values()
+            elif 'LAB2' in name and 'heatsheet' in name.lower():
+                result['LAB2'] = ws.get_all_values()
+        return result if len(result) == 2 else None
     except Exception:
         return None
 
 
-def get_sheet_targets(mean_bsp_kts, mean_tws_kph, upwind: bool):
+def _parse(row, col):
+    """Return float from row[col], or None if empty/missing/non-numeric."""
+    try:
+        s = str(row[col]).strip()
+        return float(s) if s else None
+    except (IndexError, ValueError):
+        return None
+
+
+def get_cheatsheet_targets(foils, wing_size, rudders, jib, upwind, tws_mean):
     """
-    Interpolate performance targets from SPEED v2 for the current session conditions.
+    Look up all performance targets from the SPEED v2 cheatsheet for the
+    current boat configuration and wind conditions.
 
     Args:
-        mean_bsp_kts: session mean boat speed in knots (from bsp_mean column)
-        mean_tws_kph: session mean true wind speed in kph (from tws_mean column)
-        upwind: True for upwind, False for downwind
+        foils:     'HSB2' or 'LAB2'
+        wing_size: '18m', '24m', or '27m' (must match foil choice)
+        rudders:   'LARW' or 'HSRW'
+        jib:       'Big' or 'Small'
+        upwind:    True for upwind section, False for downwind
+        tws_mean:  session mean TWS in the same unit as the sheet TWS column.
+                   The sheet TWS column uses the same unit as tws_mean from the
+                   app (both sourced from the SailGP telemetry system).
 
     Returns:
-        Dict of {metric_name: target_value} for sheet-covered metrics.
-        Empty dict if sheet is unavailable or inputs are None.
+        dict with keys for all metrics plus '_matched_tws' (the sheet row TWS
+        that was selected). Values are float or None (None = empty cell = no target).
+        Returns {} if sheet is unavailable or config has no matching section.
     """
-    tables = load_speed_targets()
-    if tables is None:
+    tables = _load_cheatsheet_rows()
+    if tables is None or foils not in tables:
         return {}
 
-    direction = 'upwind' if upwind else 'downwind'
-    result = {}
+    key = (foils, wing_size, upwind)
+    if key not in _SECTIONS:
+        return {}
 
-    # Cant and Rudder look up by BSP (sheet uses kph, convert from kts)
-    if mean_bsp_kts is not None:
-        bsp_kph = mean_bsp_kts * KTS_TO_KPH
+    start, end = _SECTIONS[key]
+    rows = tables[foils][start:end]
 
-        val = _interp(bsp_kph, *tables['cant'][direction])
-        if val is not None:
-            result['CANT'] = val
+    # Find closest TWS row — no interpolation, round to nearest available
+    best_row = None
+    best_diff = float('inf')
+    for row in rows:
+        tws_str = str(row[1]).strip() if len(row) > 1 else ''
+        if not tws_str:
+            continue
+        try:
+            diff = abs(float(tws_str) - (tws_mean or 0))
+            if diff < best_diff:
+                best_diff = diff
+                best_row = row
+        except ValueError:
+            continue
 
-        val = _interp(bsp_kph, *tables['rudder'][direction])
-        if val is not None:
-            result['Rudder Average'] = val
+    if best_row is None:
+        return {}
 
-    # Drop target looks up by TWS (sheet uses kts, convert from kph)
-    if mean_tws_kph is not None:
-        tws_kts = mean_tws_kph * KPH_TO_KTS
+    rud_col = 8 if rudders == 'LARW' else 9
+    jib_base = 14 if jib == 'Big' else 17
 
-        val = _interp(tws_kts, *tables['drop'][direction])
-        if val is not None:
-            result['CANT Drop Target'] = val
-
-    return result
+    return {
+        'TWA':            _parse(best_row, 2),
+        'BSP':            _parse(best_row, 4),
+        'DRP':            _parse(best_row, 5),
+        'CANT':           _parse(best_row, 6),
+        'Ride Height':    _parse(best_row, 7),
+        'Rudder Avg':     _parse(best_row, rud_col),
+        'Camber':         _parse(best_row, 10),
+        'Wing Twist':     _parse(best_row, 11),
+        'Clew Position':  _parse(best_row, 12),
+        'Wing Rotation':  _parse(best_row, 13),
+        'Jib Track':      _parse(best_row, jib_base),
+        'Jib Sheet Load': _parse(best_row, jib_base + 1),
+        'Jib Cunno Load': _parse(best_row, jib_base + 2),
+        'VMG':            None,
+        '_matched_tws':   float(str(best_row[1]).strip()),
+    }
