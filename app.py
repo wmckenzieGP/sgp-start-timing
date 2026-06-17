@@ -485,39 +485,58 @@ def main():
             st.session_state["password_correct"] = False
             st.rerun()
 
-    # ── DATA PIPELINE ─────────────────────────────────────
-    periods_df = pl.DataFrame()
-    raw_rows = 0
-    data_label = ""
+    # ── STABLE HEADER (outside fragment so it never flickers) ──
+    config_parts = [foils, f"{wing} Wing", f"{rudders} Rudders", f"{jib} Jib"]
+    st.markdown('<div class="dash-title">F50 Performance Dashboard</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="config-bar"><span>{" · ".join(config_parts)}</span>'
+        f' &nbsp;|&nbsp; {direction}</div>',
+        unsafe_allow_html=True
+    )
 
-    if is_live:
-        end_dt = datetime.utcnow()
-        start_dt = end_dt - timedelta(minutes=rolling_window)
-        data_label = f"Live — last {rolling_window} min"
-        with st.spinner("Fetching live data..."):
+    # Determine fragment auto-refresh interval
+    if is_live and auto_refresh:
+        _run_every = refresh_rate
+    elif data_mode == "Replay" and st.session_state.get('replay_playing', False):
+        _run_every = 5
+    else:
+        _run_every = None
+
+    # ── LIVE DASHBOARD FRAGMENT ───────────────────────────
+    # @st.fragment re-runs only this section on each refresh tick —
+    # the sidebar, header, and page chrome stay completely stable.
+    @st.fragment(run_every=_run_every)
+    def _dashboard():
+        periods_df = pl.DataFrame()
+        data_label = ""
+
+        if is_live:
+            end_dt = datetime.utcnow()
+            start_dt = end_dt - timedelta(minutes=rolling_window)
+            data_label = f"Live — last {rolling_window} min"
             try:
                 fetcher = SGPDataProvider(boat=boat)
                 raw = fetcher.get_data(
                     start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
                 )
-                raw_rows = raw.height
-                if raw_rows > 0:
+                if raw.height > 0:
                     fetcher.process_data(raw, period_duration=period_duration,
                                          min_speed_upwind=min_bsp, min_speed_downwind=min_bsp)
-                    periods_df = fetcher.periods or pl.DataFrame()
+                    periods_df = fetcher.periods if fetcher.periods is not None else pl.DataFrame()
             except Exception as e:
                 st.error(f"Live data error: {e}")
 
-    else:
-        # Replay mode
-        start_dt_key = st.session_state.get('replay_start_dt')
-        playing = st.session_state.get('replay_playing', False)
-
-        if start_dt_key is None:
-            st.info("Select a date and time above, then press ▶ Play to start replay.")
         else:
-            # Compute virtual now
+            # Replay mode
+            start_dt_key = st.session_state.get('replay_start_dt')
+            playing = st.session_state.get('replay_playing', False)
+
+            if start_dt_key is None:
+                st.info("Select a date and time in the sidebar, then press ▶ Play.")
+                return
+
+            # Advance virtual clock
             if playing:
                 wall_elapsed = time_lib.time() - st.session_state.get('replay_play_wall', time_lib.time())
                 total_elapsed = st.session_state.get('replay_elapsed_frozen', 0.0) + wall_elapsed
@@ -526,13 +545,12 @@ def main():
 
             virtual_now = start_dt_key + timedelta(seconds=total_elapsed)
             virtual_start = virtual_now - timedelta(minutes=rolling_window)
-
             data_label = f"Replay — {virtual_now.strftime('%H:%M:%S')} UTC"
 
-            # Fetch a 2-hour window from the start if not cached
+            # Load 2-hour block once and cache in session state
             fetch_hash = (start_dt_key.isoformat(), boat, period_duration, min_bsp)
-            if st.session_state.get('replay_fetch_hash') != fetch_hash or 'replay_raw_df' not in st.session_state:
-                with st.spinner(f"Loading replay data from {start_dt_key.strftime('%H:%M')} UTC..."):
+            if st.session_state.get('replay_fetch_hash') != fetch_hash or 'replay_periods' not in st.session_state:
+                with st.spinner(f"Loading replay data from {start_dt_key.strftime('%H:%M')} UTC…"):
                     try:
                         end_fetch = start_dt_key + timedelta(hours=2)
                         fetcher = SGPDataProvider(boat=boat)
@@ -540,111 +558,88 @@ def main():
                             start_dt_key.strftime("%Y-%m-%dT%H:%M:%SZ"),
                             end_fetch.strftime("%Y-%m-%dT%H:%M:%SZ")
                         )
-                        raw_rows = raw.height
-                        if raw_rows > 0:
+                        if raw.height > 0:
                             fetcher.process_data(raw, period_duration=period_duration,
                                                   min_speed_upwind=min_bsp, min_speed_downwind=min_bsp)
-                            st.session_state['replay_raw_df'] = raw
-                            st.session_state['replay_periods'] = fetcher.periods or pl.DataFrame()
+                            st.session_state['replay_periods'] = fetcher.periods if fetcher.periods is not None else pl.DataFrame()
                         else:
-                            st.session_state['replay_raw_df'] = pl.DataFrame()
                             st.session_state['replay_periods'] = pl.DataFrame()
                         st.session_state['replay_fetch_hash'] = fetch_hash
                     except Exception as e:
                         st.error(f"Replay data error: {e}")
-                        st.session_state['replay_raw_df'] = pl.DataFrame()
                         st.session_state['replay_periods'] = pl.DataFrame()
 
+            # Slice to the current virtual window
             all_periods = st.session_state.get('replay_periods', pl.DataFrame())
             if not all_periods.is_empty() and 'timestamp' in all_periods.columns:
                 periods_df = all_periods.filter(
                     (pl.col("timestamp") >= virtual_start) &
                     (pl.col("timestamp") <= virtual_now)
                 )
-            raw_rows = st.session_state.get('replay_raw_df', pl.DataFrame()).height
 
-            # Show virtual clock
             status_icon = "🔴" if playing else "⏸"
-            st.markdown(f'<div class="replay-time">{status_icon} {virtual_now.strftime("%Y-%m-%d %H:%M:%S")} UTC &nbsp;|&nbsp; Window: {rolling_window} min</div>',
-                        unsafe_allow_html=True)
-
-            # Auto-advance: rerun if playing
-            if playing:
-                time_lib.sleep(5)
-                st.rerun()
-
-    # ── FILTER PERIODS ─────────────────────────────────────
-    filtered = pl.DataFrame()
-    if not periods_df.is_empty():
-        dir_col = "upwind" if upwind_mode else "downwind"
-        if dir_col in periods_df.columns:
-            filtered = periods_df.filter(
-                pl.col(dir_col) & (pl.col("bsp_mean") >= min_bsp)
+            st.markdown(
+                f'<div class="replay-time">{status_icon} {virtual_now.strftime("%Y-%m-%d %H:%M:%S")} UTC'
+                f' &nbsp;|&nbsp; Window: {rolling_window} min</div>',
+                unsafe_allow_html=True
             )
 
-    # ── SHEET TARGETS ─────────────────────────────────────
-    mean_tws = None
-    if not filtered.is_empty() and "tws_mean" in filtered.columns:
-        mean_tws = filtered["tws_mean"].mean()
-
-    sheet_targets = sheets_client.get_cheatsheet_targets(
-        foils, wing, rudders, jib, upwind_mode, mean_tws or 20.0
-    )
-    matched_tws = sheet_targets.pop('_matched_tws', None)
-
-    # Build final target values (from sheet, None if no value)
-    active_targets = {m: sheet_targets.get(m) for m in TARGETS_METADATA}
-
-    # ── COMPUTE ACTUALS ─────────────────────────────────────
-    actuals = {}
-    for name in TARGETS_METADATA:
-        col = get_col(name, upwind_mode)
-        if col and not filtered.is_empty() and col in filtered.columns:
-            actuals[name] = filtered[col].mean()
-        else:
-            actuals[name] = None
-
-    # ── PAGE HEADER ─────────────────────────────────────────
-    config_parts = [foils, f"{wing} Wing", f"{rudders} Rudders", f"{jib} Jib"]
-    tws_info = f"TWS row {matched_tws}" if matched_tws is not None else "No TWS match"
-    n_periods = len(filtered) if not filtered.is_empty() else 0
-
-    st.markdown(f'<div class="dash-title">F50 Performance Dashboard</div>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="config-bar">'
-        f'<span>{" · ".join(config_parts)}</span>'
-        f' &nbsp;|&nbsp; {direction}'
-        f' &nbsp;|&nbsp; {tws_info}'
-        f' &nbsp;|&nbsp; {n_periods} periods'
-        f' &nbsp;|&nbsp; {data_label}'
-        f'</div>',
-        unsafe_allow_html=True
-    )
-
-    # ── DASHBOARD GRID ────────────────────────────────────
-    for cat_name, metrics, n_cols in DASHBOARD_CATEGORIES:
-        st.markdown(f'<div class="cat-header">{cat_name}</div>', unsafe_allow_html=True)
-        cols = st.columns(n_cols)
-        for i, name in enumerate(metrics):
-            with cols[i % n_cols]:
-                render_card(
-                    name=name,
-                    value=actuals.get(name),
-                    target=active_targets.get(name),
-                    tolerance=tolerances.get(name, DEFAULT_TOLERANCES.get(name, 1.0))
+        # ── FILTER ──────────────────────────────────────────
+        filtered = pl.DataFrame()
+        if not periods_df.is_empty():
+            dir_col = "upwind" if upwind_mode else "downwind"
+            if dir_col in periods_df.columns:
+                filtered = periods_df.filter(
+                    pl.col(dir_col) & (pl.col("bsp_mean") >= min_bsp)
                 )
 
-    # ── DATA DETAIL ───────────────────────────────────────
-    with st.expander("Raw period data", expanded=False):
-        if not filtered.is_empty():
-            st.dataframe(filtered.to_pandas(), use_container_width=True)
-        else:
-            st.caption("No period data available.")
+        # ── SHEET TARGETS ────────────────────────────────────
+        mean_tws = filtered["tws_mean"].mean() if (not filtered.is_empty() and "tws_mean" in filtered.columns) else None
+        sheet_targets = sheets_client.get_cheatsheet_targets(
+            foils, wing, rudders, jib, upwind_mode, mean_tws or 20.0
+        )
+        matched_tws = sheet_targets.pop('_matched_tws', None)
+        active_targets = {m: sheet_targets.get(m) for m in TARGETS_METADATA}
 
-    # ── AUTO-REFRESH (live mode) ──────────────────────────
-    if is_live and auto_refresh:
-        time_lib.sleep(refresh_rate)
-        st.rerun()
+        # ── ACTUALS ─────────────────────────────────────────
+        actuals = {}
+        for name in TARGETS_METADATA:
+            col = get_col(name, upwind_mode)
+            actuals[name] = (filtered[col].mean()
+                             if col and not filtered.is_empty() and col in filtered.columns
+                             else None)
+
+        # ── SUB-HEADER (TWS row + stats) ─────────────────────
+        n_periods = len(filtered) if not filtered.is_empty() else 0
+        tws_info = f"TWS row {matched_tws}" if matched_tws is not None else "No TWS match"
+        st.markdown(
+            f'<div class="config-bar">'
+            f'{tws_info} &nbsp;|&nbsp; {n_periods} periods &nbsp;|&nbsp; {data_label}'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+        # ── METRIC GRID ──────────────────────────────────────
+        for cat_name, metrics, n_cols in DASHBOARD_CATEGORIES:
+            st.markdown(f'<div class="cat-header">{cat_name}</div>', unsafe_allow_html=True)
+            cols = st.columns(n_cols)
+            for i, name in enumerate(metrics):
+                with cols[i % n_cols]:
+                    render_card(
+                        name=name,
+                        value=actuals.get(name),
+                        target=active_targets.get(name),
+                        tolerance=tolerances.get(name, DEFAULT_TOLERANCES.get(name, 1.0))
+                    )
+
+        # ── RAW DATA EXPANDER ────────────────────────────────
+        with st.expander("Raw period data", expanded=False):
+            if not filtered.is_empty():
+                st.dataframe(filtered.to_pandas(), use_container_width=True)
+            else:
+                st.caption("No period data available.")
+
+    _dashboard()
 
 
 if __name__ == "__main__" or True:
