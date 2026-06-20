@@ -11,13 +11,6 @@ BOAT_MEASUREMENTS = [
     "TWA_SGP_deg",
 ]
 
-MARK_MEASUREMENTS = [
-    "LATITUDE_GPS_unk",
-    "LONGITUDE_GPS_unk",
-]
-
-MARK_NAMES = ["SL1", "SL2"]
-
 ALL_BOATS = ["NZL", "AUS", "GBR", "FRA", "DEN", "ESP", "SUI", "CAN", "USA", "ITA", "GER", "BRA", "SWE"]
 
 
@@ -70,39 +63,6 @@ from(bucket: "sailgp")
     )
     return df
 
-
-def fetch_mark_positions(start_time, end_time) -> dict[str, tuple[float, float]]:
-    """Return {mark_name: (lat, lon)} averaged over the time window."""
-    mfilter = _measurement_filter(MARK_MEASUREMENTS)
-    mark_filter = " or ".join(f'r["boat"] == "{m}"' for m in MARK_NAMES)
-
-    query = f"""
-from(bucket: "sailgp")
-  |> range(start: {_fmt(start_time)}, stop: {_fmt(end_time)})
-  |> filter(fn: (r) => {mfilter})
-  |> filter(fn: (r) => r["_field"] == "value")
-  |> filter(fn: (r) => r["level"] == "mdss")
-  |> filter(fn: (r) => {mark_filter})
-  |> drop(columns: ["_start", "_stop", "_field", "level"])
-  |> pivot(rowKey: ["_time", "boat"], columnKey: ["_measurement"], valueColumn: "_value")
-"""
-    with _client() as c:
-        result = c.query_api().query_data_frame(org=ORG_ID, query=query)
-
-    df = _coerce_result(result)
-    if df.empty:
-        return {}
-
-    df["LATITUDE_GPS_unk"] = df["LATITUDE_GPS_unk"] / 10_000_000
-    df["LONGITUDE_GPS_unk"] = df["LONGITUDE_GPS_unk"] / 10_000_000
-
-    marks = {}
-    for mark in MARK_NAMES:
-        sub = df[df["boat"] == mark]
-        if not sub.empty:
-            marks[mark] = (sub["LATITUDE_GPS_unk"].mean(), sub["LONGITUDE_GPS_unk"].mean())
-
-    return marks
 
 
 def _coerce_result(result) -> pd.DataFrame:

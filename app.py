@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 from datetime import datetime, timedelta
 
-from data_fetcher import fetch_boat_gps, fetch_mark_positions, ALL_BOATS
+from config import APP_USERNAME, APP_PASSWORD
+from data_fetcher import fetch_boat_gps, ALL_BOATS
 from start_analysis import detect_practice_starts, summarise_starts, PracticeStart
 
 # ---------------------------------------------------------------------------
@@ -16,7 +16,37 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("SailGP — Start Timing Analysis")
+# ---------------------------------------------------------------------------
+# Login gate
+# ---------------------------------------------------------------------------
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    st.title("SailGP — Start Timing")
+    col, _ = st.columns([1, 2])
+    with col:
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Login", type="primary", use_container_width=True):
+            if username == APP_USERNAME and password == APP_PASSWORD:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Incorrect username or password.")
+    st.stop()
+
+# ---------------------------------------------------------------------------
+# Session state
+# ---------------------------------------------------------------------------
+if "results" not in st.session_state:
+    st.session_state.results = {}
+if "boat_dfs" not in st.session_state:
+    st.session_state.boat_dfs = {}
+if "marks" not in st.session_state:
+    st.session_state.marks = {}
+if "selected_ps" not in st.session_state:
+    st.session_state.selected_ps = None
 
 # ---------------------------------------------------------------------------
 # Sidebar
@@ -35,6 +65,18 @@ with st.sidebar:
     start_dt = datetime.combine(start_date, start_time_input)
     end_dt = datetime.combine(end_date, end_time_input)
 
+    st.divider()
+    st.subheader("Start Line Marks")
+    st.caption("Enter GPS coordinates from the course setup sheet.")
+
+    sl1_lat = st.number_input("SL1 Latitude",  value=0.0, format="%.6f", key="sl1_lat")
+    sl1_lon = st.number_input("SL1 Longitude", value=0.0, format="%.6f", key="sl1_lon")
+    sl2_lat = st.number_input("SL2 Latitude",  value=0.0, format="%.6f", key="sl2_lat")
+    sl2_lon = st.number_input("SL2 Longitude", value=0.0, format="%.6f", key="sl2_lon")
+
+    marks_valid = not (sl1_lat == 0.0 and sl1_lon == 0.0 and sl2_lat == 0.0 and sl2_lon == 0.0)
+
+    st.divider()
     selected_boats = st.multiselect(
         "Boats",
         options=ALL_BOATS,
@@ -43,17 +85,15 @@ with st.sidebar:
 
     fetch_btn = st.button("Fetch & Analyse", type="primary", use_container_width=True)
 
+    st.divider()
+    if st.button("Logout", use_container_width=True):
+        st.session_state.authenticated = False
+        st.rerun()
+
 # ---------------------------------------------------------------------------
-# Session state
+# Main header
 # ---------------------------------------------------------------------------
-if "results" not in st.session_state:
-    st.session_state.results = {}          # boat → list[PracticeStart]
-if "boat_dfs" not in st.session_state:
-    st.session_state.boat_dfs = {}         # boat → DataFrame (GPS track)
-if "marks" not in st.session_state:
-    st.session_state.marks = {}            # {"SL1": (lat,lon), "SL2": (lat,lon)}
-if "selected_ps" not in st.session_state:
-    st.session_state.selected_ps = None    # (boat, ps_number)
+st.title("SailGP — Start Timing Analysis")
 
 # ---------------------------------------------------------------------------
 # Fetch & analyse
@@ -65,17 +105,14 @@ if fetch_btn:
     if not selected_boats:
         st.error("Select at least one boat.")
         st.stop()
-
-    with st.spinner("Fetching mark positions…"):
-        marks = fetch_mark_positions(start_dt, end_dt)
-
-    if "SL1" not in marks or "SL2" not in marks:
-        st.warning(
-            "Could not retrieve SL1/SL2 mark positions from InfluxDB. "
-            "Check that mark data is available for the selected time window."
-        )
+    if not marks_valid:
+        st.error("Enter SL1 and SL2 GPS coordinates before fetching.")
         st.stop()
 
+    marks = {
+        "SL1": (sl1_lat, sl1_lon),
+        "SL2": (sl2_lat, sl2_lon),
+    }
     st.session_state.marks = marks
 
     results = {}
@@ -83,7 +120,7 @@ if fetch_btn:
 
     progress = st.progress(0, text="Fetching boat data…")
     for i, boat in enumerate(selected_boats):
-        progress.progress((i) / len(selected_boats), text=f"Fetching {boat}…")
+        progress.progress(i / len(selected_boats), text=f"Fetching {boat}…")
         df = fetch_boat_gps(boat, start_dt, end_dt)
         if df.empty:
             st.warning(f"No data returned for {boat} in this window.")
@@ -91,8 +128,12 @@ if fetch_btn:
         boat_dfs[boat] = df
         starts = detect_practice_starts(df, marks["SL1"], marks["SL2"], boat)
         results[boat] = starts
-        progress.progress((i + 1) / len(selected_boats), text=f"Analysed {boat} — {len(starts)} start(s) found.")
+        progress.progress(
+            (i + 1) / len(selected_boats),
+            text=f"Analysed {boat} — {len(starts)} start(s) found.",
+        )
 
+    progress.empty()
     st.session_state.results = results
     st.session_state.boat_dfs = boat_dfs
     st.session_state.selected_ps = None
@@ -105,13 +146,10 @@ boat_dfs = st.session_state.boat_dfs
 marks = st.session_state.marks
 
 if not results:
-    st.info("Configure a time window and press **Fetch & Analyse** to begin.")
+    st.info("Enter mark coordinates, select a time window, and press **Fetch & Analyse** to begin.")
     st.stop()
 
-# ---- Timing tables --------------------------------------------------------
-
 st.subheader("Practice Start Timings")
-st.caption("Click a row to view the GPS trail for that practice start.")
 
 for boat, starts in results.items():
     with st.expander(f"🚤 {boat}", expanded=True):
@@ -119,9 +157,6 @@ for boat, starts in results.items():
             st.write("No practice starts detected.")
             continue
 
-        summary_df = summarise_starts(starts)
-
-        # Build display table with averages row
         display_rows = []
         for ps in starts:
             display_rows.append({
@@ -131,20 +166,17 @@ for boat, starts in results.items():
                 "T1 (s before start)": f"{ps.t1_delta:.1f}" if ps.t1_delta is not None else "—",
             })
 
-        # Average row
         t2_vals = [ps.t2_delta for ps in starts if ps.t2_delta is not None]
         t1_vals = [ps.t1_delta for ps in starts if ps.t1_delta is not None]
         display_rows.append({
-            "Practice Start": "**Average**",
+            "Practice Start": "Average",
             "Start Time (UTC)": "",
             "T2 (s before start)": f"{sum(t2_vals)/len(t2_vals):.1f}" if t2_vals else "—",
             "T1 (s before start)": f"{sum(t1_vals)/len(t1_vals):.1f}" if t1_vals else "—",
         })
 
-        table_df = pd.DataFrame(display_rows)
-        st.dataframe(table_df, use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
 
-        # Row selector for trail viewer
         ps_options = [f"PS {ps.number}" for ps in starts]
         selected_label = st.selectbox(
             "View GPS trail for:",
@@ -174,13 +206,11 @@ if st.session_state.selected_ps is not None:
             if track_df.empty:
                 st.warning("No GPS data in the trail window.")
             else:
-                marks_data = st.session_state.marks
-                sl1 = marks_data.get("SL1")
-                sl2 = marks_data.get("SL2")
+                sl1 = marks.get("SL1")
+                sl2 = marks.get("SL2")
 
                 fig = go.Figure()
 
-                # Boat track
                 fig.add_trace(go.Scattermapbox(
                     lat=track_df["latitude"].tolist(),
                     lon=track_df["longitude"].tolist(),
@@ -195,7 +225,6 @@ if st.session_state.selected_ps is not None:
                     hoverinfo="text",
                 ))
 
-                # Start line
                 if sl1 and sl2:
                     fig.add_trace(go.Scattermapbox(
                         lat=[sl1[0], sl2[0]],
@@ -206,14 +235,13 @@ if st.session_state.selected_ps is not None:
                         name="Start Line",
                     ))
 
-                # Event markers
-                def _nearest_row(df: pd.DataFrame, t) -> pd.Series | None:
+                def _nearest_row(df, t):
                     if t is None or df.empty:
                         return None
                     idx = (df["timestamp"] - t).abs().idxmin()
                     return df.loc[idx]
 
-                def _add_event_marker(t, label: str, color: str):
+                def _add_event_marker(t, label, color):
                     row = _nearest_row(track_df, t)
                     if row is None:
                         return
@@ -234,13 +262,10 @@ if st.session_state.selected_ps is not None:
                 _add_event_marker(ps.t2_time, "T2", "yellow")
                 _add_event_marker(ps.start_time, "START", "lime")
 
-                center_lat = track_df["latitude"].mean()
-                center_lon = track_df["longitude"].mean()
-
                 fig.update_layout(
                     mapbox=dict(
                         style="open-street-map",
-                        center=dict(lat=center_lat, lon=center_lon),
+                        center=dict(lat=track_df["latitude"].mean(), lon=track_df["longitude"].mean()),
                         zoom=14,
                     ),
                     margin=dict(l=0, r=0, t=0, b=0),
@@ -250,11 +275,11 @@ if st.session_state.selected_ps is not None:
 
                 st.plotly_chart(fig, use_container_width=True)
 
-                # Timing summary for this start
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     st.metric("T1 before start", f"{ps.t1_delta:.1f} s" if ps.t1_delta else "—")
                 with col2:
                     st.metric("T2 before start", f"{ps.t2_delta:.1f} s" if ps.t2_delta else "—")
                 with col3:
-                    st.metric("T2 → T1 gap", f"{(ps.t1_delta - ps.t2_delta):.1f} s" if (ps.t1_delta and ps.t2_delta) else "—")
+                    val = (ps.t1_delta - ps.t2_delta) if (ps.t1_delta and ps.t2_delta) else None
+                    st.metric("T2 → T1 gap", f"{val:.1f} s" if val else "—")
