@@ -196,9 +196,12 @@ def detect_practice_starts(
     ref_lat = (sl1[0] + sl2[0]) / 2
     ref_lon = (sl1[1] + sl2[1]) / 2
 
-    ax, ay = _to_xy(np.array([sl1[0]]), np.array([sl1[1]]), ref_lat, ref_lon)
-    bx, by = _to_xy(np.array([sl2[0]]), np.array([sl2[1]]), ref_lat, ref_lon)
-    ax, ay, bx, by = float(ax), float(ay), float(bx), float(by)
+    R = 6_371_000.0
+    cos_ref = math.cos(math.radians(ref_lat))
+    ax = math.radians(sl1[1] - ref_lon) * R * cos_ref
+    ay = math.radians(sl1[0] - ref_lat) * R
+    bx = math.radians(sl2[1] - ref_lon) * R * cos_ref
+    by = math.radians(sl2[0] - ref_lat) * R
 
     df = df.copy().sort_values("timestamp").reset_index(drop=True)
 
