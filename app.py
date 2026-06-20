@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 from config import APP_USERNAME, APP_PASSWORD
-from data_fetcher import fetch_boat_gps, fetch_mark_positions, ALL_BOATS
+from data_fetcher import fetch_boat_gps, fetch_mark_positions, fetch_mark_measurements, ALL_BOATS
 from start_analysis import detect_practice_starts, summarise_starts, PracticeStart
 
 # ---------------------------------------------------------------------------
@@ -95,6 +95,16 @@ with st.sidebar:
     )
 
     fetch_btn = st.button("Fetch & Analyse", type="primary", use_container_width=True)
+
+    st.divider()
+    with st.expander("Diagnostics"):
+        if st.button("List SL1/SL2 measurements", use_container_width=True):
+            with st.spinner("Querying…"):
+                diag_df = fetch_mark_measurements(start_dt, end_dt)
+            if diag_df.empty:
+                st.warning("No measurements found for SL1/SL2 in this window.")
+            else:
+                st.dataframe(diag_df[["boat", "_measurement"]].drop_duplicates().sort_values(["boat","_measurement"]), use_container_width=True, hide_index=True)
 
     st.divider()
     if st.button("Logout", use_container_width=True):

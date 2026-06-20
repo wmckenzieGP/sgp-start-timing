@@ -101,6 +101,25 @@ from(bucket: "sailgp")
 
 
 
+def fetch_mark_measurements(start_time, end_time) -> pd.DataFrame:
+    """
+    Diagnostic: return every distinct _measurement available for SL1 and SL2
+    at mdss level in the given window. Use this to find the correct GPS field names.
+    """
+    query = f"""
+from(bucket: "sailgp")
+  |> range(start: {_fmt(start_time)}, stop: {_fmt(end_time)})
+  |> filter(fn: (r) => r["_field"] == "value")
+  |> filter(fn: (r) => r["level"] == "mdss")
+  |> filter(fn: (r) => r["boat"] == "SL1" or r["boat"] == "SL2")
+  |> keep(columns: ["boat", "_measurement"])
+  |> distinct(column: "_measurement")
+"""
+    with _client() as c:
+        result = c.query_api().query_data_frame(org=ORG_ID, query=query)
+    return _coerce_result(result)
+
+
 def _coerce_result(result) -> pd.DataFrame:
     if isinstance(result, list):
         parts = [r for r in result if r is not None and not r.empty]
