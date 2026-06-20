@@ -188,7 +188,8 @@ App.zip
 streamlit.log
 *.log
 
-# Google service account credentials
+# Google service account credentials and large reference files
 *.json
-!presets.json
-!tolerances.json
+
+# Streamlit secrets (managed via Streamlit Cloud UI, never commit)
+.streamlit/secrets.toml
