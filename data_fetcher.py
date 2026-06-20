@@ -31,8 +31,12 @@ def _measurement_filter(measurements: list[str]) -> str:
 # Mark positions — single query for both marks and both coordinates
 # ---------------------------------------------------------------------------
 
-def fetch_mark_positions(start_time, end_time) -> tuple[dict[str, tuple[float, float]], float | None]:
-    """Return ({mark: (lat, lon)}, twd) for SL1 and SL2. Single InfluxDB round trip."""
+def fetch_mark_positions(start_time, end_time) -> dict:
+    """
+    Return mark positions and TWD in a single dict.
+    Keys "SL1" and "SL2" map to (lat, lon) tuples.
+    Optional key "_twd" holds the True Wind Direction float (degrees).
+    """
     query = f"""
 from(bucket: "sailgp")
   |> range(start: {_fmt(start_time)}, stop: {_fmt(end_time)})
@@ -49,7 +53,7 @@ from(bucket: "sailgp")
 
     df = _coerce_result(result)
     if df.empty or "_value" not in df.columns:
-        return {}, None
+        return {}
 
     marks = {}
     twd = None
@@ -66,11 +70,13 @@ from(bucket: "sailgp")
         lat = float(lat_row["_value"].iloc[0]) / 10_000_000
         lon = float(lon_row["_value"].iloc[0]) / 10_000_000
         marks[mark] = (lat, lon)
-        # Use first mark's TWD (SL1 preferred); don't overwrite if already set
         if twd is None and not twd_row.empty:
             twd = float(twd_row["_value"].iloc[0])
 
-    return marks, twd
+    if twd is not None:
+        marks["_twd"] = twd
+
+    return marks
 
 
 # ---------------------------------------------------------------------------

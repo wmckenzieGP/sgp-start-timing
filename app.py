@@ -73,13 +73,14 @@ with st.sidebar:
     fetch_marks_btn = st.button("Auto-fetch mark GPS", use_container_width=True)
     if fetch_marks_btn:
         with st.spinner("Fetching SL1/SL2 from InfluxDB…"):
-            fetched, twd_val = fetch_mark_positions(start_dt, end_dt)
+            fetched = fetch_mark_positions(start_dt, end_dt)
         if fetched:
+            twd_val = fetched.pop("_twd", None)
+            if twd_val is not None:
+                st.session_state.twd = twd_val
             for k, (lat, lon) in fetched.items():
                 st.session_state[f"_{k.lower()}_lat"] = lat
                 st.session_state[f"_{k.lower()}_lon"] = lon
-            if twd_val is not None:
-                st.session_state.twd = twd_val
             st.success(f"Fetched: {', '.join(fetched.keys())}")
         else:
             st.warning("No mark GPS found in InfluxDB for this window. Enter coordinates manually.")
