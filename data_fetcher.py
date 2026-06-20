@@ -102,6 +102,10 @@ from(bucket: "sailgp")
     df["latitude"] = df["latitude"] / 10_000_000
     df["longitude"] = df["longitude"] / 10_000_000
     df["boat"] = boat
+    # Strip timezone so timestamp comparisons work throughout the app
+    if df["timestamp"].dt.tz is not None:
+        df["timestamp"] = df["timestamp"].dt.tz_convert("UTC").dt.tz_localize(None)
+
     df = df.sort_values("timestamp").reset_index(drop=True)
     for col in ["latitude", "longitude", "cog", "sog", "twa"]:
         if col in df.columns:

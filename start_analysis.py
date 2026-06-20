@@ -242,11 +242,12 @@ def detect_practice_starts(
         ]
         t1_time = prior_t1[-1][0] if prior_t1 else None
 
-        # Only count starts where both T1 and T2 exist and T1 is within 3 minutes
+        # Require both T1 and T2, T1 within 3 min, T2 at least 10 s before start
         if t1_time is None or t2_time is None:
             continue
-        t1_delta = (c_time - t1_time).total_seconds()
-        if t1_delta > 180:
+        if (c_time - t1_time).total_seconds() > 180:
+            continue
+        if (c_time - t2_time).total_seconds() < 10:
             continue
 
         results.append(PracticeStart(
