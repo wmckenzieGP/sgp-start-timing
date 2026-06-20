@@ -37,7 +37,7 @@ def fetch_mark_positions(start_time, end_time) -> dict[str, tuple[float, float]]
         lat = _fetch_single_mdss_mean("LATITUDE_MDSS_deg", mark, start_time, end_time)
         lon = _fetch_single_mdss_mean("LONGITUDE_MDSS_deg", mark, start_time, end_time)
         if lat is not None and lon is not None:
-            marks[mark] = (lat, lon)
+            marks[mark] = (lat / 10_000_000, lon / 10_000_000)
     return marks
 
 
