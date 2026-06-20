@@ -1,10 +1,14 @@
 """
 Start line crossing detection and practice start grouping.
 
-Sequence per practice start (working backwards from the start):
-  T1  → boat crosses the *extended* start line on port tack (TWA < 0)
-  T2  → boat tacks/gybes port→starboard (TWA sign flips negative→positive)
-  Start → boat crosses the *actual* line segment on starboard tack (TWA > 0)
+Sequence per practice start:
+  T1  → boat crosses the extended start line going outbound (away from pre-start area)
+  T2  → boat tacks/gybes (large COG change, or TWA sign flip if available)
+  Start → boat crosses the segment going inbound (back toward and through the line)
+
+Detection is TWA-independent: crossings are classified by direction (which side
+the boat came from), and tacks are detected by COG heading change.
+TWA is used only when available to improve tack timing accuracy.
 
 Timings reported as seconds before the start crossing.
 """
@@ -12,7 +16,7 @@ Timings reported as seconds before the start crossing.
 import math
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -37,7 +41,6 @@ class PracticeStart:
         return (self.start_time - self.t1_time).total_seconds()
 
     def track_window(self, df: pd.DataFrame, pre_t1_s: float = 20.0, post_start_s: float = 10.0) -> pd.DataFrame:
-        """Slice of the boat's GPS track for display."""
         anchor = self.t1_time if self.t1_time is not None else self.start_time
         t_start = anchor - pd.Timedelta(seconds=pre_t1_s)
         t_end = self.start_time + pd.Timedelta(seconds=post_start_s)
@@ -50,18 +53,13 @@ class PracticeStart:
 # ---------------------------------------------------------------------------
 
 def _lat_lon_to_xy(lat: float, lon: float, ref_lat: float, ref_lon: float) -> tuple[float, float]:
-    """Flat-earth projection in metres relative to a reference point."""
     R = 6_371_000.0
     x = math.radians(lon - ref_lon) * R * math.cos(math.radians(ref_lat))
     y = math.radians(lat - ref_lat) * R
     return x, y
 
 
-def _signed_distance(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
-    """
-    Signed distance of point P from the infinite line through A→B.
-    Positive = left side, negative = right side (using right-hand rule).
-    """
+def _signed_distance(px, py, ax, ay, bx, by) -> float:
     dx, dy = bx - ax, by - ay
     length = math.hypot(dx, dy)
     if length == 0:
@@ -69,54 +67,29 @@ def _signed_distance(px: float, py: float, ax: float, ay: float, bx: float, by: 
     return ((px - ax) * dy - (py - ay) * dx) / length
 
 
-def _point_on_segment(px: float, py: float, ax: float, ay: float, bx: float, by: float, tol: float = 20.0) -> bool:
-    """True if the nearest point on segment AB to P is within tol metres of P."""
+def _along_segment_fraction(px, py, ax, ay, bx, by) -> float:
+    """Return t in [0,1] for the closest point on AB to P. <0 or >1 means beyond the ends."""
     dx, dy = bx - ax, by - ay
     seg_len_sq = dx * dx + dy * dy
     if seg_len_sq == 0:
-        return math.hypot(px - ax, py - ay) < tol
-    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / seg_len_sq))
-    near_x = ax + t * dx
-    near_y = ay + t * dy
-    return math.hypot(px - near_x, py - near_y) < tol
+        return 0.0
+    return ((px - ax) * dx + (py - ay) * dy) / seg_len_sq
+
+
+def _cog_change(cog1: float, cog2: float) -> float:
+    """Smallest signed angle change between two COG values (degrees)."""
+    diff = (cog2 - cog1 + 180) % 360 - 180
+    return diff
 
 
 # ---------------------------------------------------------------------------
 # Core detection
 # ---------------------------------------------------------------------------
 
-def _compute_crossings(df: pd.DataFrame, sl1_xy: tuple, sl2_xy: tuple) -> pd.DataFrame:
-    """
-    Add columns to df:
-      dist_to_line  : signed distance (metres) to the extended start line
-      on_segment    : bool, nearest point is within the segment bounds + buffer
-    """
-    ax, ay = sl1_xy
-    bx, by = sl2_xy
-
-    # Extend segment by 200 m each end so boats near the marks still trigger
-    seg_len = math.hypot(bx - ax, by - ay)
-    if seg_len == 0:
-        df["dist_to_line"] = np.nan
-        df["on_segment"] = False
-        return df
-
-    ux, uy = (bx - ax) / seg_len, (by - ay) / seg_len
-    ext = 200.0
-    ax_e, ay_e = ax - ux * ext, ay - uy * ext
-    bx_e, by_e = bx + ux * ext, by + uy * ext
-
-    df = df.copy()
-    df["dist_to_line"] = df.apply(
-        lambda r: _signed_distance(r["x"], r["y"], ax, ay, bx, by), axis=1
-    )
-    df["on_segment"] = df.apply(
-        lambda r: _point_on_segment(r["x"], r["y"], ax_e, ay_e, bx_e, by_e, tol=50.0), axis=1
-    )
-    return df
-
-
-MIN_CROSSING_GAP_S = 15  # ignore crossings within 15 s of each other
+MIN_CROSSING_GAP_S = 20
+MIN_TACK_COG_CHANGE = 60   # degrees — minimum heading change to count as a tack
+MAX_TACK_DURATION_S = 30   # seconds — tack must complete within this window
+MAX_START_SEQUENCE_S = 600 # seconds — T1 must be within 10 min before Start
 
 
 def detect_practice_starts(
@@ -125,108 +98,164 @@ def detect_practice_starts(
     sl2: tuple[float, float],
     boat: str,
 ) -> list[PracticeStart]:
-    """
-    Detect all practice starts for a single boat.
-
-    Parameters
-    ----------
-    df   : time-series for one boat, must have columns:
-           timestamp, latitude, longitude, twa
-    sl1  : (lat, lon) of SL1 mark
-    sl2  : (lat, lon) of SL2 mark
-    boat : boat identifier string
-    """
-    if df.empty or len(df) < 5:
+    if df.empty or len(df) < 10:
         return []
 
-    # Project everything to flat-earth XY
     ref_lat = (sl1[0] + sl2[0]) / 2
     ref_lon = (sl1[1] + sl2[1]) / 2
     sl1_xy = _lat_lon_to_xy(sl1[0], sl1[1], ref_lat, ref_lon)
     sl2_xy = _lat_lon_to_xy(sl2[0], sl2[1], ref_lat, ref_lon)
+    ax, ay = sl1_xy
+    bx, by = sl2_xy
+    seg_len = math.hypot(bx - ax, by - ay)
 
-    df = df.copy()
-    df["x"], df["y"] = zip(*df.apply(
-        lambda r: _lat_lon_to_xy(r["latitude"], r["longitude"], ref_lat, ref_lon), axis=1
-    ))
-    df = _compute_crossings(df, sl1_xy, sl2_xy)
-    df = df.sort_values("timestamp").reset_index(drop=True)
+    df = df.copy().sort_values("timestamp").reset_index(drop=True)
 
-    # Sign of distance to line  (+1 left / -1 right)
-    df["side"] = np.sign(df["dist_to_line"])
+    # Project to XY
+    coords = [_lat_lon_to_xy(r.latitude, r.longitude, ref_lat, ref_lon)
+              for r in df.itertuples()]
+    df["x"] = [c[0] for c in coords]
+    df["y"] = [c[1] for c in coords]
+
+    # Signed distance to the infinite line through SL1→SL2
+    df["dist"] = [_signed_distance(r.x, r.y, ax, ay, bx, by) for r in df.itertuples()]
+    df["side"] = np.sign(df["dist"])
+
+    # Fraction along the segment (negative = before SL1, >1 = beyond SL2)
+    df["along"] = [_along_segment_fraction(r.x, r.y, ax, ay, bx, by) for r in df.itertuples()]
+
+    # Check TWA availability
+    twa_available = (
+        "twa" in df.columns
+        and df["twa"].notna().sum() > len(df) * 0.3  # at least 30% non-null
+        and df["twa"].abs().max() > 1.0               # not all zeros
+    )
 
     # -----------------------------------------------------------------------
-    # Detect start crossings  (on segment, starboard tack → TWA > 0)
+    # Detect all line crossings
+    # Each crossing: (time, from_side, along_fraction_at_crossing)
+    # from_side = side the boat was on BEFORE crossing
     # -----------------------------------------------------------------------
-    start_events: list[pd.Timestamp] = []
+    crossings = []  # (timestamp, from_side, along_frac, twa_at_crossing)
+
     for i in range(1, len(df)):
         prev, cur = df.iloc[i - 1], df.iloc[i]
+
+        # Skip if same side, or if either point is exactly on the line
         if prev["side"] == cur["side"] or prev["side"] == 0 or cur["side"] == 0:
             continue
-        mid_twa = (prev["twa"] + cur["twa"]) / 2
-        mid_on_seg = cur["on_segment"] or prev["on_segment"]
-        if mid_twa > 0 and mid_on_seg:
-            t_cross = prev["timestamp"] + (cur["timestamp"] - prev["timestamp"]) / 2
-            if not start_events or (t_cross - start_events[-1]).total_seconds() > MIN_CROSSING_GAP_S:
-                start_events.append(t_cross)
 
-    if not start_events:
+        # Interpolate crossing time and along-fraction
+        d1, d2 = abs(prev["dist"]), abs(cur["dist"])
+        frac = d1 / (d1 + d2) if (d1 + d2) > 0 else 0.5
+        t_cross = prev["timestamp"] + (cur["timestamp"] - prev["timestamp"]) * frac
+        along_cross = prev["along"] + (cur["along"] - prev["along"]) * frac
+
+        # Debounce
+        if crossings and (t_cross - crossings[-1][0]).total_seconds() < MIN_CROSSING_GAP_S:
+            continue
+
+        twa_val = (prev.get("twa", np.nan) + cur.get("twa", np.nan)) / 2 if twa_available else np.nan
+
+        crossings.append((t_cross, int(prev["side"]), along_cross, twa_val))
+
+    if not crossings:
         return []
 
     # -----------------------------------------------------------------------
-    # Detect T1 crossings  (extended line, port tack → TWA < 0)
+    # Detect tacks / gybes
+    # Primary method: large COG change over a short window
+    # Secondary: TWA sign flip (negative → positive) if available
     # -----------------------------------------------------------------------
-    t1_events: list[pd.Timestamp] = []
-    for i in range(1, len(df)):
-        prev, cur = df.iloc[i - 1], df.iloc[i]
-        if prev["side"] == cur["side"] or prev["side"] == 0 or cur["side"] == 0:
-            continue
-        mid_twa = (prev["twa"] + cur["twa"]) / 2
-        if mid_twa < 0:
-            t_cross = prev["timestamp"] + (cur["timestamp"] - prev["timestamp"]) / 2
-            if not t1_events or (t_cross - t1_events[-1]).total_seconds() > MIN_CROSSING_GAP_S:
-                t1_events.append(t_cross)
+    tacks = []  # timestamps
+
+    if "cog" in df.columns and df["cog"].notna().sum() > len(df) * 0.3:
+        for i in range(1, len(df)):
+            for j in range(i + 1, min(i + MAX_TACK_DURATION_S + 1, len(df))):
+                dt = (df.iloc[j]["timestamp"] - df.iloc[i]["timestamp"]).total_seconds()
+                if dt > MAX_TACK_DURATION_S:
+                    break
+                cog_delta = abs(_cog_change(df.iloc[i]["cog"], df.iloc[j]["cog"]))
+                if cog_delta >= MIN_TACK_COG_CHANGE:
+                    t_tack = df.iloc[i]["timestamp"] + (df.iloc[j]["timestamp"] - df.iloc[i]["timestamp"]) / 2
+                    if not tacks or (t_tack - tacks[-1]).total_seconds() > MIN_CROSSING_GAP_S:
+                        tacks.append(t_tack)
+                    break
+
+    # Supplement with TWA sign flips if available
+    if twa_available:
+        for i in range(1, len(df)):
+            prev_twa = df.iloc[i - 1]["twa"]
+            cur_twa = df.iloc[i]["twa"]
+            if pd.isna(prev_twa) or pd.isna(cur_twa):
+                continue
+            if prev_twa < -5 and cur_twa > 5:
+                dt = (df.iloc[i]["timestamp"] - df.iloc[i - 1]["timestamp"]).total_seconds()
+                if dt < MAX_TACK_DURATION_S:
+                    t_tack = df.iloc[i - 1]["timestamp"] + (df.iloc[i]["timestamp"] - df.iloc[i - 1]["timestamp"]) / 2
+                    if not tacks or (t_tack - tacks[-1]).total_seconds() > MIN_CROSSING_GAP_S:
+                        tacks.append(t_tack)
+
+    tacks = sorted(set(tacks))
 
     # -----------------------------------------------------------------------
-    # Detect T2 tacks  (TWA sign: negative → positive)
+    # Classify crossings as start vs T1
+    #
+    # Strategy: a "start" crossing is one where the boat crosses near the
+    # actual segment (along fraction roughly 0–1, with buffer). A practice
+    # start sequence is: outbound crossing (T1) → tack (T2) → inbound
+    # crossing near the segment (Start).
+    #
+    # "Near segment" = along fraction between -0.5 and 1.5
+    # (i.e. within half a segment length of either end)
     # -----------------------------------------------------------------------
-    t2_events: list[pd.Timestamp] = []
-    for i in range(1, len(df)):
-        prev, cur = df.iloc[i - 1], df.iloc[i]
-        if prev["twa"] < 0 and cur["twa"] > 0:
-            dt = (cur["timestamp"] - prev["timestamp"]).total_seconds()
-            if dt < 10:  # filter out data gaps
-                t_tack = prev["timestamp"] + (cur["timestamp"] - prev["timestamp"]) / 2
-                if not t2_events or (t_tack - t2_events[-1]).total_seconds() > MIN_CROSSING_GAP_S:
-                    t2_events.append(t_tack)
+    SEGMENT_BUFFER = 0.5  # fraction of segment length beyond each end
 
-    # -----------------------------------------------------------------------
-    # Group into practice starts
-    # -----------------------------------------------------------------------
+    # Separate into near-segment crossings (start candidates) and extended crossings (T1 candidates)
+    start_candidates = [c for c in crossings if -SEGMENT_BUFFER <= c[2] <= 1 + SEGMENT_BUFFER]
+    t1_candidates_all = crossings  # T1 can be anywhere on extended line
+
+    # A start candidate is valid if:
+    # 1. There is a tack before it
+    # 2. There is a prior crossing of the opposite direction (T1) before that tack
     results: list[PracticeStart] = []
-    for idx, start_t in enumerate(start_events, start=1):
-        # Most recent T2 before this start
-        t2_candidates = [t for t in t2_events if t < start_t]
-        t2 = t2_candidates[-1] if t2_candidates else None
+    used_starts: set = set()
 
-        # Most recent T1 before T2 (or before start if no T2)
-        cutoff = t2 if t2 is not None else start_t
-        t1_candidates = [t for t in t1_events if t < cutoff]
-        t1 = t1_candidates[-1] if t1_candidates else None
+    for c_time, c_from_side, c_along, c_twa in start_candidates:
+        if c_time in used_starts:
+            continue
+
+        # Find most recent tack before this crossing
+        prior_tacks = [t for t in tacks if t < c_time]
+        if not prior_tacks:
+            continue
+        t2_time = prior_tacks[-1]
+
+        # Find most recent crossing of the OPPOSITE direction before the tack
+        # (opposite direction = came from the other side)
+        opposite_side = -c_from_side  # start came FROM c_from_side; T1 came FROM opposite
+        prior_crossings = [
+            c for c in t1_candidates_all
+            if c[0] < t2_time
+            and c[1] == opposite_side
+            and (c_time - c[0]).total_seconds() <= MAX_START_SEQUENCE_S
+        ]
+        t1_crossing = prior_crossings[-1] if prior_crossings else None
+        t1_time = t1_crossing[0] if t1_crossing else None
 
         results.append(PracticeStart(
             boat=boat,
-            number=idx,
-            start_time=start_t,
-            t2_time=t2,
-            t1_time=t1,
+            number=len(results) + 1,
+            start_time=c_time,
+            t2_time=t2_time,
+            t1_time=t1_time,
         ))
+        used_starts.add(c_time)
 
     return results
 
 
 def summarise_starts(starts: list[PracticeStart]) -> pd.DataFrame:
-    """Convert a list of PracticeStart objects to a display DataFrame."""
     rows = []
     for ps in starts:
         rows.append({
