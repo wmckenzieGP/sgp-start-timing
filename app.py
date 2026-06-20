@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 from config import APP_USERNAME, APP_PASSWORD
-from data_fetcher import fetch_boat_gps, ALL_BOATS
+from data_fetcher import fetch_boat_gps, fetch_mark_positions, ALL_BOATS
 from start_analysis import detect_practice_starts, summarise_starts, PracticeStart
 
 # ---------------------------------------------------------------------------
@@ -67,12 +67,23 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Start Line Marks")
-    st.caption("Enter GPS coordinates from the course setup sheet.")
 
-    sl1_lat = st.number_input("SL1 Latitude",  value=0.0, format="%.6f", key="sl1_lat")
-    sl1_lon = st.number_input("SL1 Longitude", value=0.0, format="%.6f", key="sl1_lon")
-    sl2_lat = st.number_input("SL2 Latitude",  value=0.0, format="%.6f", key="sl2_lat")
-    sl2_lon = st.number_input("SL2 Longitude", value=0.0, format="%.6f", key="sl2_lon")
+    fetch_marks_btn = st.button("Auto-fetch mark GPS", use_container_width=True)
+    if fetch_marks_btn:
+        with st.spinner("Fetching SL1/SL2 from InfluxDB…"):
+            fetched = fetch_mark_positions(start_dt, end_dt)
+        if fetched:
+            for k, (lat, lon) in fetched.items():
+                st.session_state[f"_{k.lower()}_lat"] = lat
+                st.session_state[f"_{k.lower()}_lon"] = lon
+            st.success(f"Fetched: {', '.join(fetched.keys())}")
+        else:
+            st.warning("No mark GPS found in InfluxDB for this window. Enter coordinates manually.")
+
+    sl1_lat = st.number_input("SL1 Latitude",  value=st.session_state.get("_sl1_lat", 0.0), format="%.6f")
+    sl1_lon = st.number_input("SL1 Longitude", value=st.session_state.get("_sl1_lon", 0.0), format="%.6f")
+    sl2_lat = st.number_input("SL2 Latitude",  value=st.session_state.get("_sl2_lat", 0.0), format="%.6f")
+    sl2_lon = st.number_input("SL2 Longitude", value=st.session_state.get("_sl2_lon", 0.0), format="%.6f")
 
     marks_valid = not (sl1_lat == 0.0 and sl1_lon == 0.0 and sl2_lat == 0.0 and sl2_lon == 0.0)
 

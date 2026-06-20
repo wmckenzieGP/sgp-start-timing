@@ -26,6 +26,42 @@ def _measurement_filter(measurements: list[str]) -> str:
     return " or ".join(f'r["_measurement"] == "{m}"' for m in measurements)
 
 
+def fetch_mark_positions(start_time, end_time) -> dict[str, tuple[float, float]]:
+    """
+    Return {mark_name: (lat, lon)} for SL1 and SL2, averaged over the time window.
+    Queries each measurement separately (mirrors the Grafana mdss pattern).
+    Returns an empty dict if no data found.
+    """
+    marks = {}
+    for mark in ("SL1", "SL2"):
+        lat = _fetch_single_mdss_mean("LATITUDE_GPS_unk", mark, start_time, end_time)
+        lon = _fetch_single_mdss_mean("LONGITUDE_GPS_unk", mark, start_time, end_time)
+        if lat is not None and lon is not None:
+            marks[mark] = (lat / 10_000_000, lon / 10_000_000)
+    return marks
+
+
+def _fetch_single_mdss_mean(measurement: str, mark: str, start_time, end_time):
+    """Fetch the mean value of a single measurement for a mark over the time window."""
+    query = f"""
+from(bucket: "sailgp")
+  |> range(start: {_fmt(start_time)}, stop: {_fmt(end_time)})
+  |> filter(fn: (r) => r["_measurement"] == "{measurement}")
+  |> filter(fn: (r) => r["_field"] == "value")
+  |> filter(fn: (r) => r["level"] == "mdss")
+  |> filter(fn: (r) => r["boat"] == "{mark}")
+  |> mean()
+"""
+    with _client() as c:
+        result = c.query_api().query_data_frame(org=ORG_ID, query=query)
+
+    df = _coerce_result(result)
+    if df.empty or "_value" not in df.columns:
+        return None
+    val = df["_value"].dropna()
+    return float(val.iloc[0]) if not val.empty else None
+
+
 def fetch_boat_gps(boat: str, start_time, end_time) -> pd.DataFrame:
     """Return time-series GPS + wind data for a single boat."""
     mfilter = _measurement_filter(BOAT_MEASUREMENTS)
