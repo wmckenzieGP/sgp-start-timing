@@ -47,6 +47,8 @@ if "marks" not in st.session_state:
     st.session_state.marks = {}
 if "selected_ps" not in st.session_state:
     st.session_state.selected_ps = None
+if "twd" not in st.session_state:
+    st.session_state.twd = None
 
 # ---------------------------------------------------------------------------
 # Sidebar
@@ -71,11 +73,13 @@ with st.sidebar:
     fetch_marks_btn = st.button("Auto-fetch mark GPS", use_container_width=True)
     if fetch_marks_btn:
         with st.spinner("Fetching SL1/SL2 from InfluxDB…"):
-            fetched = fetch_mark_positions(start_dt, end_dt)
+            fetched, twd_val = fetch_mark_positions(start_dt, end_dt)
         if fetched:
             for k, (lat, lon) in fetched.items():
                 st.session_state[f"_{k.lower()}_lat"] = lat
                 st.session_state[f"_{k.lower()}_lon"] = lon
+            if twd_val is not None:
+                st.session_state.twd = twd_val
             st.success(f"Fetched: {', '.join(fetched.keys())}")
         else:
             st.warning("No mark GPS found in InfluxDB for this window. Enter coordinates manually.")
@@ -280,11 +284,13 @@ if st.session_state.selected_ps is not None:
                 _add_event_marker(ps.t2_time, "T2", "yellow")
                 _add_event_marker(ps.start_time, "START", "lime")
 
+                map_bearing = st.session_state.twd if st.session_state.twd is not None else 0
                 fig.update_layout(
                     mapbox=dict(
                         style="open-street-map",
                         center=dict(lat=track_df["latitude"].mean(), lon=track_df["longitude"].mean()),
                         zoom=14,
+                        bearing=map_bearing,
                     ),
                     margin=dict(l=0, r=0, t=0, b=0),
                     height=500,

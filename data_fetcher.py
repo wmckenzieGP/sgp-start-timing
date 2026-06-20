@@ -31,12 +31,12 @@ def _measurement_filter(measurements: list[str]) -> str:
 # Mark positions — single query for both marks and both coordinates
 # ---------------------------------------------------------------------------
 
-def fetch_mark_positions(start_time, end_time) -> dict[str, tuple[float, float]]:
-    """Return {mark: (lat, lon)} for SL1 and SL2. Single InfluxDB round trip."""
+def fetch_mark_positions(start_time, end_time) -> tuple[dict[str, tuple[float, float]], float | None]:
+    """Return ({mark: (lat, lon)}, twd) for SL1 and SL2. Single InfluxDB round trip."""
     query = f"""
 from(bucket: "sailgp")
   |> range(start: {_fmt(start_time)}, stop: {_fmt(end_time)})
-  |> filter(fn: (r) => r["_measurement"] == "LATITUDE_MDSS_deg" or r["_measurement"] == "LONGITUDE_MDSS_deg")
+  |> filter(fn: (r) => r["_measurement"] == "LATITUDE_MDSS_deg" or r["_measurement"] == "LONGITUDE_MDSS_deg" or r["_measurement"] == "TWD_MDSS_deg")
   |> filter(fn: (r) => r["_field"] == "value")
   |> filter(fn: (r) => r["level"] == "mdss")
   |> filter(fn: (r) => r["boat"] == "SL1" or r["boat"] == "SL2")
@@ -49,22 +49,28 @@ from(bucket: "sailgp")
 
     df = _coerce_result(result)
     if df.empty or "_value" not in df.columns:
-        return {}
+        return {}, None
 
     marks = {}
+    twd = None
+
     for mark in ("SL1", "SL2"):
         sub = df[df["boat"] == mark] if "boat" in df.columns else pd.DataFrame()
         if sub.empty:
             continue
         lat_row = sub[sub["_measurement"] == "LATITUDE_MDSS_deg"]
         lon_row = sub[sub["_measurement"] == "LONGITUDE_MDSS_deg"]
+        twd_row = sub[sub["_measurement"] == "TWD_MDSS_deg"]
         if lat_row.empty or lon_row.empty:
             continue
         lat = float(lat_row["_value"].iloc[0]) / 10_000_000
         lon = float(lon_row["_value"].iloc[0]) / 10_000_000
         marks[mark] = (lat, lon)
+        # Use first mark's TWD (SL1 preferred); don't overwrite if already set
+        if twd is None and not twd_row.empty:
+            twd = float(twd_row["_value"].iloc[0])
 
-    return marks
+    return marks, twd
 
 
 # ---------------------------------------------------------------------------

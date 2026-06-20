@@ -88,12 +88,14 @@ def _along_frac_vec(px, py, ax, ay, bx, by) -> np.ndarray:
 
 def _detect_crossings(df: pd.DataFrame, ax, ay, bx, by) -> list[tuple]:
     """
-    Return list of (timestamp, from_side, along_frac) for every line crossing.
+    Return list of (timestamp, from_side, along_frac, twa_val) for every line crossing.
+    twa_val is NaN if TWA column is absent or both neighbours are NaN.
     Crossings within MIN_GAP_S of each other are collapsed to one.
     """
     px = df["x"].values
     py = df["y"].values
     ts = df["timestamp"].values
+    twa_arr = df["twa"].values if "twa" in df.columns else np.full(len(px), np.nan)
 
     dist  = _signed_dist_vec(px, py, ax, ay, bx, by)
     along = _along_frac_vec(px, py, ax, ay, bx, by)
@@ -111,15 +113,26 @@ def _detect_crossings(df: pd.DataFrame, ax, ay, bx, by) -> list[tuple]:
         d1, d2 = abs(dist[i]), abs(dist[i + 1])
         frac   = d1 / (d1 + d2) if (d1 + d2) > 0 else 0.5
 
-        t_cross    = pd.Timestamp(ts[i]) + (pd.Timestamp(ts[i + 1]) - pd.Timestamp(ts[i])) * frac
+        t_cross     = pd.Timestamp(ts[i]) + (pd.Timestamp(ts[i + 1]) - pd.Timestamp(ts[i])) * frac
         along_cross = float(along[i] + (along[i + 1] - along[i]) * frac)
-        from_side  = int(prev_s[i])
+        from_side   = int(prev_s[i])
+
+        # Interpolate TWA at the crossing point
+        t1v, t2v = twa_arr[i], twa_arr[i + 1]
+        if np.isnan(t1v) and np.isnan(t2v):
+            twa_cross = float("nan")
+        elif np.isnan(t1v):
+            twa_cross = float(t2v)
+        elif np.isnan(t2v):
+            twa_cross = float(t1v)
+        else:
+            twa_cross = float(t1v + (t2v - t1v) * frac)
 
         # Debounce
         if last_t is not None and (t_cross - last_t).total_seconds() < MIN_GAP_S:
             continue
 
-        crossings.append((t_cross, from_side, along_cross))
+        crossings.append((t_cross, from_side, along_cross, twa_cross))
         last_t = t_cross
 
     return crossings
@@ -158,18 +171,15 @@ def _detect_tacks(df: pd.DataFrame) -> list[pd.Timestamp]:
     cog_later = cog[look:]
     delta     = np.abs(((cog_later - cog_now + 180) % 360) - 180)
 
-    # Tack index = midpoint of the look-ahead window
-    tack_mask    = delta >= MIN_COG_CHANGE
-    raw_indices  = np.where(tack_mask)[0]
+    tack_mask   = delta >= MIN_COG_CHANGE
+    raw_indices = np.where(tack_mask)[0]
 
     if len(raw_indices) == 0:
         return []
 
-    # Use midpoint of each tack window as the tack timestamp
     mid = look // 2
     tack_ts = [pd.Timestamp(ts[min(i + mid, n - 1)]) for i in raw_indices]
 
-    # Debounce: keep only tacks separated by MIN_GAP_S
     debounced, last_t = [], None
     for t in tack_ts:
         if last_t is None or (t - last_t).total_seconds() >= MIN_GAP_S:
@@ -177,6 +187,51 @@ def _detect_tacks(df: pd.DataFrame) -> list[pd.Timestamp]:
             last_t = t
 
     return debounced
+
+
+def _detect_port_to_stbd_tacks(df: pd.DataFrame) -> list[pd.Timestamp]:
+    """
+    Return debounced list of port→starboard tack timestamps.
+    Uses TWA sign flip (neg→pos) as primary; falls back to COG if TWA unavailable.
+    """
+    twa_col = "twa"
+    if twa_col in df.columns and df[twa_col].notna().sum() >= 10:
+        twa = df[twa_col].ffill().bfill().values
+        ts  = df["timestamp"].values
+        n   = len(twa)
+
+        dt_sec = pd.Series(
+            (pd.to_datetime(ts[1:]) - pd.to_datetime(ts[:-1])) / pd.Timedelta(seconds=1)
+        ).median()
+        if pd.isna(dt_sec) or dt_sec <= 0:
+            dt_sec = 1.0
+
+        look = max(2, int(TACK_WINDOW_S / dt_sec))
+
+        if n <= look:
+            return []
+
+        twa_now   = twa[:n - look]
+        twa_later = twa[look:]
+        # Port (negative) → starboard (positive)
+        tack_mask   = (twa_now < -5) & (twa_later > 5)
+        raw_indices = np.where(tack_mask)[0]
+
+        if len(raw_indices) == 0:
+            return []
+
+        mid = look // 2
+        tack_ts = [pd.Timestamp(ts[min(i + mid, n - 1)]) for i in raw_indices]
+
+        debounced, last_t = [], None
+        for t in tack_ts:
+            if last_t is None or (t - last_t).total_seconds() >= MIN_GAP_S:
+                debounced.append(t)
+                last_t = t
+
+        return debounced
+    else:
+        return _detect_tacks(df)
 
 
 # ---------------------------------------------------------------------------
@@ -210,34 +265,49 @@ def detect_practice_starts(
     df["x"] = xs
     df["y"] = ys
 
+    seg_len = math.hypot(bx - ax, by - ay)
+    # T1 must cross within 100 m beyond either end of the segment
+    t1_along_min = -100.0 / seg_len if seg_len > 0 else -SEGMENT_BUFFER
+    t1_along_max =  1.0 + 100.0 / seg_len if seg_len > 0 else 1.0 + SEGMENT_BUFFER
+
     crossings = _detect_crossings(df, ax, ay, bx, by)
-    tacks     = _detect_tacks(df)
+    # T2 requires a confirmed port→starboard transition
+    tacks     = _detect_port_to_stbd_tacks(df)
 
     if not crossings:
         return []
 
-    # Separate crossings near the segment (start candidates) vs anywhere (T1 candidates)
-    start_candidates = [c for c in crossings if -SEGMENT_BUFFER <= c[2] <= 1 + SEGMENT_BUFFER]
+    # Start candidates: near segment AND on starboard tack (TWA > 0)
+    start_candidates = [
+        c for c in crossings
+        if -SEGMENT_BUFFER <= c[2] <= 1 + SEGMENT_BUFFER
+        and (math.isnan(c[3]) or c[3] > 0)
+    ]
 
     results: list[PracticeStart] = []
     used: set = set()
 
-    for c_time, c_from_side, _ in start_candidates:
+    for c_time, c_from_side, _c_frac, _c_twa in start_candidates:
         if c_time in used:
             continue
 
-        # Most recent tack before this crossing
+        # Most recent port→starboard tack before this crossing
         prior_tacks = [t for t in tacks if t < c_time]
         if not prior_tacks:
             continue
         t2_time = prior_tacks[-1]
 
-        # Most recent crossing in the opposite direction before the tack
+        # Most recent T1 crossing before the tack:
+        #   - opposite crossing direction from the start
+        #   - within 100 m of the segment (along_frac bounds)
+        #   - on port tack (TWA < 0)
         opposite = -c_from_side
         prior_t1 = [
             c for c in crossings
             if c[0] < t2_time
             and c[1] == opposite
+            and t1_along_min <= c[2] <= t1_along_max
+            and (math.isnan(c[3]) or c[3] < 0)
             and (c_time - c[0]).total_seconds() <= MAX_SEQUENCE_S
         ]
         t1_time = prior_t1[-1][0] if prior_t1 else None
