@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 from config import APP_USERNAME, APP_PASSWORD
-from data_fetcher import fetch_boat_gps, fetch_mark_positions, fetch_mark_measurements, ALL_BOATS
+from data_fetcher import fetch_all_boats_gps, fetch_mark_positions, fetch_mark_measurements, ALL_BOATS
 from start_analysis import detect_practice_starts, summarise_starts, PracticeStart
 
 # ---------------------------------------------------------------------------
@@ -139,20 +139,17 @@ if fetch_btn:
     results = {}
     boat_dfs = {}
 
-    progress = st.progress(0, text="Fetching boat data…")
-    for i, boat in enumerate(selected_boats):
-        progress.progress(i / len(selected_boats), text=f"Fetching {boat}…")
-        df = fetch_boat_gps(boat, start_dt, end_dt)
+    progress = st.progress(0, text=f"Fetching {len(selected_boats)} boats in parallel…")
+    all_dfs = fetch_all_boats_gps(selected_boats, start_dt, end_dt)
+
+    progress.progress(0.7, text="Analysing starts…")
+    for boat, df in all_dfs.items():
         if df.empty:
             st.warning(f"No data returned for {boat} in this window.")
             continue
         boat_dfs[boat] = df
         starts = detect_practice_starts(df, marks["SL1"], marks["SL2"], boat)
         results[boat] = starts
-        progress.progress(
-            (i + 1) / len(selected_boats),
-            text=f"Analysed {boat} — {len(starts)} start(s) found.",
-        )
 
     progress.empty()
     st.session_state.results = results
